@@ -55,7 +55,7 @@ import binascii
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
-VERSION = "1.10"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+VERSION = "1.11"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
 
 def _base_dir():
     """程序所在目录。PyInstaller 单文件模式下 __file__ 指向退出就销毁的临时解压
@@ -89,6 +89,18 @@ def set_logger(fn):
     """图形界面用它接管日志；fn(text) 可能来自非主线程。"""
     global _SINK
     _SINK = fn
+
+
+STOP_CHECK = lambda: False
+"""界面（tk/网页）注入"用户是否按了停止"（True=停）。只在种子与种子之间生效：
+当前正在处理的那个种子一定跑完（成功，或失败自动回灌旧条目），绝不拦腰截断。"""
+
+
+def _stopped():
+    try:
+        return bool(STOP_CHECK())
+    except Exception:
+        return False
 
 
 def log(msg):
@@ -417,6 +429,31 @@ class QbClient:
         except Exception:
             return []
 
+    def tracker_rows(self, h):
+        """tracker 完整行（含数字 id，将来 removeTrackers 用）"""
+        try:
+            j = self._get("/api/v2/torrents/trackers", hash=h)
+            return [x for x in j if x.get("url") and not x.get("url").startswith("**")]
+        except Exception:
+            return []
+
+    def add_trackers(self, h, urls):
+        """给条目追加 tracker（可 \\n 分隔多条）"""
+        r = self.s.post(self.base + "/api/v2/torrents/addTrackers",
+                        data={"hashes": h,
+                              "urls": urls if isinstance(urls, str) else "\n".join(urls)},
+                        timeout=self.timeout)
+        if r.status_code != 200:
+            raise RuntimeError("addTrackers HTTP %s" % r.status_code)
+
+    def edit_tracker(self, h, orig_url, new_url):
+        """原地替换一条 tracker URL（官方端点，qB 4.1 起就有；不删条目、不碰数据）"""
+        r = self.s.post(self.base + "/api/v2/torrents/editTracker",
+                        data={"hash": h, "origUrl": orig_url, "newUrl": new_url},
+                        timeout=self.timeout)
+        if r.status_code != 200:
+            raise RuntimeError("editTracker HTTP %s" % r.status_code)
+
     def list_trackers(self, ts):
         """批量取 tracker（qB 只能逐种取，线程池加速）"""
         from concurrent.futures import ThreadPoolExecutor
@@ -474,11 +511,15 @@ class QbClient:
                                "或种子文件无效）"
                                % (r.status_code, body[:160] or "空响应"))
 
-    def find(self, ih):
+    def find_row(self, ih):
         for t in self.torrents():
             if t.get("infohash_v1", t["hash"]).lower() == ih.lower():
-                return t["hash"]
+                return t
         return None
+
+    def find(self, ih):
+        t = self.find_row(ih)
+        return t["hash"] if t else None
 
     def set_file_prio(self, h, prio_map):
         """prio_map: {文件id: 0|1|2}，用 name→id 映射后调用"""
@@ -815,11 +856,100 @@ def _qb_tracker_ok(fin, new_url, a):
     return not any(a.old in (u or "") for u in urls)
 
 
-def _qb_wait_gone(client, ih, tries=240):
-    """等旧条目真的从会话里消失（qB 删条目是异步的，马上加新的会被吞掉）"""
-    for _ in range(tries):
-        if not client.find(ih):
+def _qb_api_ge(client, want):
+    try:
+        got = tuple(int(x) for x in
+                    re.findall(r"\d+", (getattr(client, "api", "") or "").lstrip("vV"))[:3])
+    except Exception:
+        got = ()
+    return bool(got) and got >= tuple(want)
+
+
+def _qb_inplace_ok(client):
+    """WebAPI 是否有 editTracker（qB 4.1 / WebAPI 2.1 起就有）"""
+    return _qb_api_ge(client, (2, 1, 0))
+
+
+def _qb_swap_revert(client, ih, olds, new_url):
+    """原地改没成功：把已换的换回去、缺的老地址补回来（条目从未删过，复原代价小）"""
+    try:
+        now = client.trackers(ih)
+        if new_url in now:
+            client.edit_tracker(ih, new_url, olds[0])
+            now = client.trackers(ih)
+        for u in olds:
+            if u not in now:
+                client.add_trackers(ih, u)
+    except Exception as e:
+        log("  · !! 原地修改回退也失败（%s），请人工核对 %s 的 tracker"
+            % (str(e)[:60], ih[:12]))
+
+
+def _qb_swap_inplace(client, r, new_url, old_hint):
+    """不删条目、原地换 tracker：editTracker 逐条替换 → 核对，不暂停、不等待，秒级完成。
+    数据、分类、标签、文件勾选、运行状态全不动；核对不对立即回退成原样。"""
+    ih = r["hash"]
+    tag = (r.get("name") or ih[:12])[:40]
+    before = list(client.trackers(ih))
+    olds = [u for u in before if u != new_url and (not old_hint or old_hint in u)]
+    if not olds:
+        raise RuntimeError("列表里找不到可替换的 tracker，未动")
+    if old_hint and len(olds) > 1:
+        raise RuntimeError("匹配到 %d 条旧 tracker，为安全起见交给删除重建流程处理" % len(olds))
+    log("  · 试原地换 tracker（不删条目、不暂停、零等待）%s" % tag)
+    try:
+        for u in olds:
+            client.edit_tracker(ih, u, new_url)
+    except RuntimeError as e:
+        _qb_swap_revert(client, ih, olds, new_url)
+        raise RuntimeError("editTracker 调用失败：%s（已回退）" % str(e)[:70])
+    after = list(client.trackers(ih))
+    left = [u for u in olds if u in after]
+    if new_url not in after or left:
+        _qb_swap_revert(client, ih, olds, new_url)
+        raise RuntimeError("改后核对不过（新 tracker %s、旧 tracker %s；已回退）"
+                           % ("缺席" if new_url not in after else "已就位",
+                              "仍在" if left else "已移除"))
+    log("  · 已原地换 tracker（未删条目、未暂停、零等待）%s" % tag)
+    return {"mode": "inplace", "before": before, "after": after}
+
+
+class _PendingLater(Exception):
+    """qB 那边还没忙完（旧条目没删干净/新条目没现身）：
+    别在这一颗种子上干等，先把别的处理完，稍后自动回头看它。"""
+    pass
+
+
+def _qb_wait_gone(client, ih, tries=40, label=""):
+    """等旧条目真的从会话里消失（qB 删条目是异步的，马上加新的会被吞掉）。
+    每 5 秒打一行心跳：qB 眼里这条目现在是什么状态/还在不在传输——
+    等得久时能直接看出是下载器在慢慢收尾，还是它压根没答话。"""
+    tag = label or ih[:12]
+    for i in range(tries):
+        try:
+            row = client.find_row(ih) if hasattr(client, "find_row") else client.find(ih)
+        except Exception as e:
+            if i % 10 == 9:
+                log("  · 等 qB 卸载旧条目 %s … 已 %ds，这 5 秒 qB 没答话（%s）——是下载器卡了"
+                    % (tag, (i + 1) // 2, str(e)[:70]))
+            time.sleep(0.5)
+            continue
+        if not row:
             return True
+        if i % 10 == 9:
+            desc = "qB 还列着它"
+            if isinstance(row, dict):
+                desc += "：状态=%s 进度=%d%%" % (
+                    row.get("state") or "?", int(float(row.get("progress") or 0) * 100))
+                try:
+                    if float(row.get("dlspeed") or 0) > 0:
+                        desc += " 还在下载 %.0f KB/s" % (float(row["dlspeed"]) / 1024.0)
+                    if float(row.get("upspeed") or 0) > 0:
+                        desc += " 还在上传 %.0f KB/s" % (float(row["upspeed"]) / 1024.0)
+                except Exception:
+                    pass
+            log("  · 等 qB 卸载旧条目 %s … %ds/%ds（%s）"
+                % (tag, (i + 1) // 2, max(1, tries // 2), desc))
         time.sleep(0.5)
     return False
 
@@ -837,16 +967,22 @@ def _qb_add_retry(client, raw, save_path, tries=5, gap=2.0, **kw):
             return i + 1
         except RuntimeError as e:
             last = str(e)
+            log("  · qB 拒绝添加（第 %d/%d 次；Fails. 多为该 hash 尚未释放完）：%s"
+                % (i + 1, n, last[:90]))
             if i + 1 < n and gap:
                 time.sleep(gap)
     raise RuntimeError("%s（重试 %d 次仍被 qB 拒绝）" % ((last or "add 失败")[:140], n))
 
 
-def _qb_wait_id(client, ih, tries=30):
-    for _ in range(tries):
+def _qb_wait_id(client, ih, tries=30, label=""):
+    tag = label or ih[:12]
+    for i in range(tries):
         nid = client.find(ih)
         if nid:
             return nid
+        if i % 10 == 9:
+            log("  · 等 qB 把新条目列出来 %s … %ds/%ds（add 已受理，qB 建条目慢一般是磁盘忙）"
+                % (tag, i + 1, tries))
         time.sleep(1)
     return None
 
@@ -878,14 +1014,14 @@ def _qb_restore_old(client, bk, r, save_path, unwanted=None):
             raw = rewrite_announce(raw, st["old_url"])
         except Exception:
             pass
-    _qb_wait_gone(client, r["hash"])
+    _qb_wait_gone(client, r["hash"], label=(r.get("name") or r["hash"][:12]))
     try:
         _qb_add_retry(client, raw, save_path, tries=3, gap=2.0, paused=True,
                       category=st.get("category") or r.get("category") or "",
                       tags=st.get("tags") or r.get("tags") or "", skip_check=True)
     except RuntimeError:
         return False
-    nid = _qb_wait_id(client, r["hash"])
+    nid = _qb_wait_id(client, r["hash"], label=(r.get("name") or r["hash"][:12]))
     if nid and unwanted:
         try:
             _d, nf = client.detail(nid)
@@ -935,18 +1071,45 @@ def do_qb(client, r, raw, new_url, a, dry, bk=None):
     limits = {k: detail.get(k) for k in ("up_limit", "down_limit", "ratio_limit",
                                          "seeding_time_limit")}
     if dry:
-        return "演练", {"would": ("同 hash：删条目(留数据) → 加新 → 确认 → 不对就自动回灌"
-                                  if same else
-                                  "加新(skip_checking) → 确认 → 才删旧"),
+        ip = (getattr(a, "inplace", "auto") or "auto").lower()
+        would_txt = ("同 hash：原地换 tracker（不删条目；改完核对，不对自动回退）"
+                     if same and ip != "off" and _qb_inplace_ok(client)
+                     else ("同 hash：删条目(留数据) → 加新 → 确认 → 不对就自动回灌"
+                           if same else "加新(skip_checking) → 确认 → 才删旧"))
+        return "演练", {"would": would_txt,
                         "path": save_path, "unwanted": len(unwanted), "same_hash": same}
 
-    if same:                                        # --- B：同 hash，只能先让位 ---
+    if same:                                        # --- B：同 hash ---
+        ipm = (getattr(a, "inplace", "auto") or "auto").lower()
+        if ipm != "off" and _qb_inplace_ok(client):
+            try:
+                info = _qb_swap_inplace(client, r, new_url, r.get("old_url") or a.old)
+                try:
+                    sp = (bk or {}).get("state") or ""
+                    if sp and os.path.exists(sp):
+                        st0 = json.load(open(sp, encoding="utf-8"))
+                        st0["inplace"] = True
+                        st0["trackers_before"] = info["before"]
+                        json.dump(st0, open(sp, "w", encoding="utf-8"),
+                                  ensure_ascii=False, indent=1)
+                except Exception:
+                    pass
+                fin = client.state(r["id"]) or {}
+                return "ok(in-place)", {"new_id": r["id"], "inplace": True,
+                                        "pct": fin.get("pct", 100.0),
+                                        "state": fin.get("status"), "downloaded": 0,
+                                        "tracker_ok": _qb_tracker_ok(fin, new_url, a)}
+            except RuntimeError as e:
+                if ipm == "force":
+                    raise
+                log("  · 原地换 tracker 没成功（%s），回退到删除→重加" % str(e)[:90])
         client.remove(r["id"])
-        wl = max(2, int(getattr(a, "wait_limit", 120)))
-        if not _qb_wait_gone(client, r["hash"], tries=wl * 2):
+        wl = max(2, int(getattr(a, "wait_limit", 10)))
+        if not _qb_wait_gone(client, r["hash"], tries=wl * 2,
+                              label=(r.get("name") or r["hash"][:12])):
             ok = _qb_restore_old(client, bk, r, save_path, unwanted)
-            raise RuntimeError("旧条目删了还赖在列表里（qB 还在卸载），已%s，未继续"
-                               % ("回灌" if ok else "尝试回灌失败，请手动检查"))
+            raise _PendingLater("qB 删旧种还没删完（已%s），先处理别的种子"
+                                % ("回灌做种" if ok else "尝试回灌没成功，请手动加回"))
         try:
             _qb_add_retry(client, raw, save_path,
                           tries=max(2, int(getattr(a, "add_tries", 5))),
@@ -959,11 +1122,12 @@ def do_qb(client, r, raw, new_url, a, dry, bk=None):
             raise RuntimeError("新种子没能加进去（%s），旧条目已%s"
                                % (str(e)[:110], "回灌、继续做种" if ok
                                   else "尝试回灌但没成功，请手动加回（数据在盘上没动）"))
-        nid = _qb_wait_id(client, r["hash"], tries=max(2, int(getattr(a, "wait_limit", 120))))
+        nid = _qb_wait_id(client, r["hash"], tries=max(2, int(getattr(a, "wait_limit", 10))),
+                          label=(r.get("name") or r["hash"][:12]))
         if not nid:
             ok = _qb_restore_old(client, bk, r, save_path, unwanted)
-            raise RuntimeError("新种子没能加进去（qB 回绝），已%s旧条目"
-                               % ("回灌" if ok else "回灌失败，请手动加回"))
+            raise _PendingLater("新条目加了 qB 半天没列出来（已%s旧条目），先处理别的种子"
+                                % ("回灌" if ok else "回灌失败，请手动加回"))
         st = _qb_watch(client, nid, a)
         if st and (st["downloaded"] > 0 or (st["downloading"] and not st["checking"])):
             try:
@@ -1299,8 +1463,16 @@ def cmd_apply(a):
             continue
         L.setdefault(key, {"done": {}, "failed": {}})
         bad_streak = 0
-        for i, r in enumerate(todo, 1):
-            tag = "[%s %d/%d]" % (key, i, len(todo))
+        queue = [[r, 0] for r in todo]   # qB 没忙完的种子会排回队尾，稍后自动再看
+        seq = 0
+        while queue:
+            r, again = queue.pop(0)
+            seq += 1
+            if _stopped():
+                print("  ! 已按停止，本实例剩余 %d 个未处理（正在处理的从不算半截）"
+                      % (len(queue) + 1))
+                break
+            tag = "[%s %d/%d]" % (key, seq, len(todo) + len(queue))
             bk = None
             try:
                 raw, new_url, how = new_torrent_for(a, idx, r)   # 配不到就直接报错，不猜
@@ -1331,7 +1503,7 @@ def cmd_apply(a):
                                    "hashbusy": "⚠ 同hash已存在·未动旧条目"}.get(verdict, verdict)}
                 if res.get("same_hash"):
                     rec["why"] = (rec["why"] or "") + " | 同hash(先让位再加新)"
-                if verdict == "ok":
+                if str(verdict).startswith("ok"):
                     L[key]["done"][r["hash"]] = {"name": r["name"], "new_id": res.get("new_id"),
                                                  "ts": rec["ts"], "new_url": new_url,
                                                  "backup": bk}
@@ -1352,6 +1524,24 @@ def cmd_apply(a):
                                                        rec["why"], r["hash"][:12]))
                 save_ledger(L)
                 result_row(rec)
+            except _PendingLater as e:
+                gap = max(2, int(getattr(a, "wait_limit", 6)))
+                if again < 2 and not _stopped():
+                    queue.append([r, again + 1])
+                    print("  %s ⏳ %s | %s  hash=%s（不等它，约 %d 秒后再看，先看别的）"
+                          % (tag, (r["name"] or "")[:36], str(e)[:80], r["hash"][:12], gap))
+                    time.sleep(gap)
+                    continue
+                L[key]["failed"][r["hash"]] = {
+                    "name": r["name"],
+                    "why": "qB 删旧种一直没收尾，回看 2 次后放弃；旧种子仍按原 tracker 做种，数据没动",
+                    "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                if bk:
+                    L[key]["failed"][r["hash"]]["backup"] = bk
+                save_ledger(L)
+                total_bad += 1
+                print("  %s ✗ %s | 回看 2 次 qB 还没删完，这单先记失败  hash=%s"
+                      % (tag, (r["name"] or "")[:36], r["hash"][:12]))
             except Exception as e:
                 total_bad += 1
                 bad_streak += 1
@@ -1454,7 +1644,8 @@ def cmd_recover(a):
             try:
                 if c.kind == "qb":
                     c.add(e["raw"], sp, paused=True, skip_check=True)
-                    nid = _qb_wait_id(c, m["hash"], tries=max(2, int(getattr(a, "wait_limit", 120))))
+                    nid = _qb_wait_id(c, m["hash"], tries=max(2, int(getattr(a, "wait_limit", 10))),
+                                        label=(m.get("name") or m["hash"][:12]))
                     if not nid:
                         raise RuntimeError("qB 拒收这份种子")
                     st = _qb_watch(c, nid, a)
@@ -1485,7 +1676,7 @@ def cmd_recover(a):
                 else:
                     tid = c.add(e["raw"], sp, paused=True)
                     ok, st = None, None
-                    for _ in range(max(3, int(getattr(a, "wait_limit", 120)))):
+                    for _ in range(max(3, int(getattr(a, "wait_limit", 10)))):
                         st = c.state(tid)
                         if st and st["done"] and (st.get("downloaded") or 0) == 0:
                             ok = True
@@ -1819,7 +2010,7 @@ def repair_missing(c, inst, mine, a):
             if c.kind == "qb":
                 c.add(raw, st.get("path"), paused=True, skip_check=True,
                       category=st.get("category") or "", tags=st.get("tags") or "")
-                nid = _qb_wait_id(c, h, tries=max(2, int(getattr(a, "wait_limit", 120))))
+                nid = _qb_wait_id(c, h, tries=max(2, int(getattr(a, "wait_limit", 10))), label=h[:12])
                 if not nid:
                     raise RuntimeError("qB 拒收这份种子")
                 w = _qb_watch(c, nid, a)
@@ -1845,7 +2036,7 @@ def repair_missing(c, inst, mine, a):
             else:
                 tid = c.add(raw, st.get("path"), paused=True)
                 ok, w = None, None
-                for _ in range(max(3, int(getattr(a, "wait_limit", 120)))):
+                for _ in range(max(3, int(getattr(a, "wait_limit", 10)))):
                     w = c.state(tid)
                     if w and w["done"] and (w.get("downloaded") or 0) == 0:
                         ok = True
@@ -2061,7 +2252,7 @@ def _tr_addback_seed(c, raw, path, a):
     except Exception:
         pass
     gap = float(getattr(a, "poll", 5) or 5)
-    lim = gap * max(1, int(getattr(a, "wait_limit", 120) or 30))
+    lim = gap * max(1, int(getattr(a, "wait_limit", 10) or 30))
     waited = 0.0
     while waited <= lim:
         s2 = c.state(nid) or {}
@@ -2221,8 +2412,12 @@ def build_parser():
     ap.add_argument("--check-budget", dest="check_budget", type=int, default=1800,
                     help="TR 每个种子最多等多少秒读盘校验（默认 1800）")
     ap.add_argument("--poll", type=float, default=5.0, help="轮询间隔秒")
-    ap.add_argument("--wait-limit", dest="wait_limit", type=int, default=120,
-                    help="qB 等条目消失/出现的秒数上限（默认 120；大种删除慢可再加长）")
+    ap.add_argument("--wait-limit", dest="wait_limit", type=int, default=6,
+                    help="兜底路线等 qB 删完/列出条目的秒数（默认 6；超时不守在这颗种子，先处理别的、稍后自动回看两次）")
+    ap.add_argument("--inplace", choices=["auto", "force", "off"], default="auto",
+                    help="同 hash 时原地换 tracker（qB≥4.1 的 editTracker，不删条目）："
+                         "auto=支持就用、不行自动回退旧流程，force=只走原地，off=总是删除重建"
+                         "（默认 auto）")
     ap.add_argument("--add-tries", dest="add_tries", type=int, default=5,
                     help="qB /torrents/add 被拒（Fails.）时的重试次数：删条目后 hash 释放有滞后（默认 5）")
     ap.add_argument("--add-gap", dest="add_gap", type=float, default=2.0,
