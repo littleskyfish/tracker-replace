@@ -55,7 +55,7 @@ import binascii
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
-VERSION = "1.8"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+VERSION = "1.9"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
 
 def _base_dir():
     """程序所在目录。PyInstaller 单文件模式下 __file__ 指向退出就销毁的临时解压
@@ -233,6 +233,7 @@ class _StdClient(object):
         self.headers = {}
         self.cookies = {}
         self.insecure = bool(insecure)              # https 且是自签证书时才用
+        self._pool = {}                               # (scheme,host,port) -> 复用连接；Windows 频繁开关连接会把本地端口耗进 TIME_WAIT（WinError 10048）
 
     def _conn(self, scheme, host, port, timeout=None):
         """按协议建连接：https 默认校验证书，insecure=True 才跳过。"""
@@ -249,6 +250,38 @@ class _StdClient(object):
 
     def _cookies(self):
         return "; ".join("%s=%s" % kv for kv in self.cookies.items())
+
+    def _do(self, method, scheme, host, port, path, hd, body, timeout):
+        """发一次 HTTP 请求：优先复用池里的 keep-alive 连接；连接被对端
+        掐掉或本地端口被 TIME_WAIT 占用（WinError 10048）时自动重连并退避重试。"""
+        key = (scheme, host, port)
+        last = None
+        for attempt in range(5):
+            conn = self._pool.get(key)
+            if conn is None:
+                conn = self._conn(scheme, host, port, timeout)
+                self._pool[key] = conn
+            try:
+                conn.request(method, path, body=body, headers=hd)
+                resp = conn.getresponse()
+                raw = resp.read()
+                pairs = list(resp.getheaders())
+                if getattr(resp, "will_close", False):
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    self._pool.pop(key, None)
+                return resp.status, raw, pairs
+            except Exception as e:
+                last = e
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                self._pool.pop(key, None)
+                time.sleep(1.5 * (attempt + 1))
+        raise last
 
     def _keep(self, hdr_pairs):
         for k, v in hdr_pairs:
@@ -268,7 +301,7 @@ class _StdClient(object):
         if params:
             enc = urlencode([(k, "" if v is None else str(v)) for k, v in params.items()])
             path += ("&" if "?" in path else "?") + enc
-        hd = {"Accept": "*/*", "Connection": "close", "User-Agent": "tracker-replace/1.0"}
+        hd = {"Accept": "*/*", "User-Agent": "tracker-replace/1.0"}
         hd.update(self.headers)
         if headers:
             hd.update(headers)
@@ -302,19 +335,8 @@ class _StdClient(object):
             hd["Content-Length"] = str(len(body))
         last = None
         for _ in range(6):                            # 处理 301/302/307 跳转
-            conn = self._conn(scheme, host, port, timeout)
-            try:
-                conn.request(method, path, body=body, headers=hd)
-                resp = conn.getresponse()
-                raw = resp.read()
-                pairs = list(resp.getheaders())
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+            code, raw, pairs = self._do(method, scheme, host, port, path, hd, body, timeout)
             self._keep(pairs)
-            code = resp.status
             last = _Resp(code, raw, pairs)
             if code in (301, 302, 303, 307, 308):
                 loc = last.headers.get("Location") or ""
