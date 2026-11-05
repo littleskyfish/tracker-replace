@@ -1,0 +1,8 @@
+# 工具本身只用 Python 标准库，什么都不用装。
+# 只有"打包成单文件"时才需要 pyinstaller：
+#   python3 -m pip install pyinstaller        （Windows 用 build_windows.bat 会自己装）
+# 窗口界面需要 tkinter：
+#   Windows / macOS 的 python.org 安装包自带
+#   Debian/Ubuntu:  apt install python3-tk
+#   CentOS/Anolis:  yum install python3-tkinter
+#   没有图形库就用网页窗口： python3 tracker_replace.py ui
