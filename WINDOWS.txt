@@ -1,0 +1,11 @@
+tracker替换 —— Windows 用法
+
+A. 直接跑（装了 Python 3.7+）
+   双击 tracker-replace-gui.bat  -> 原生窗口
+   双击 tracker-replace-ui.bat   -> 浏览器标签页当窗口（只监听 127.0.0.1）
+
+B. 打成单文件 tracker-replace.exe（打一次，之后 exe 可拷去任何 Windows）
+   双击 build_windows.bat，跑完在 dist\tracker-replace.exe
+
+命令行： dist\tracker-replace.exe doctor --old old-tracker.example
+自检：   python tests\selftest.py
