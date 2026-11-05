@@ -15,8 +15,27 @@ import contextlib
 import json
 import os
 import queue
+import re
+
+
+def _html_escape(t):
+    t = (t or "").replace("&", "&amp;").replace("<", "&lt;")
+    t = t.replace(">", "&gt;").replace('"', "&quot;")
+    return t
+
+
+def _expand(page):
+    """restore backslash-uXXXX escapes written in the PAGE template."""
+    def one(m):
+        try:
+            return chr(int(m.group(1), 16))
+        except ValueError:
+            return "\\u" + m.group(1)
+    return re.sub(r"\\u([0-9A-Fa-f]{4})", one, page)
+
 import sys
 import threading
+import urllib.parse
 import time
 import webbrowser
 from datetime import datetime
@@ -634,9 +653,9 @@ def run_tk(conf, selftest=None):
 
 
 # --------------------------------------------------------------- 网页窗口
-PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
+PAGE = r"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>tracker替换 · 批量换 tracker</title>
+<title>tracker\u66ff\u6362 \u00b7 \u6279\u91cf\u6362 tracker</title>
 <style>
  body{font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif;margin:0;background:#f5f6f8;color:#222}
  header{background:#1f2937;color:#fff;padding:10px 16px;display:flex;align-items:center;gap:12px}
@@ -659,65 +678,65 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
  .row span{font-size:13px;color:#4b5563;min-width:88px}
  .hint{color:#6b7280;font-size:12px}
 </style></head><body>
-<header><b>tracker替换</b><span>批量换 tracker · qBittorrent / Transmission · 数据文件永不删除</span>
-<button id="stopbtn" onclick="stopTask()" style="margin-left:auto;background:#a00;color:#fff;border:0;border-radius:6px;padding:6px 14px;cursor:pointer">■ 停止任务</button><span id="busy"></span></header>
+<header><b>tracker\u66ff\u6362</b><span>\u6279\u91cf\u6362 tracker \u00b7 qBittorrent / Transmission \u00b7 \u6570\u636e\u6587\u4ef6\u6c38\u4e0d\u5220\u9664</span>
+<button id="stopbtn" onclick="stopTask()" style="margin-left:auto;background:#a00;color:#fff;border:0;border-radius:6px;padding:6px 14px;cursor:pointer">\u25a0 \u505c\u6b62\u4efb\u52a1</button><button id="quitbtn" onclick="quitApp()" title="\u505c\u6b62\u7a0b\u5e8f\u9000\u51fa" style="background:#334;color:#fff;border:0;border-radius:6px;padding:6px 14px;cursor:pointer">\u23fb \u9000\u51fa</button><span id="busy"></span></header>
 <main>
  <div class="card l">
-  <h3>客户端实例 <span class="hint" id="ver"></span></h3>
-  <table id="tb"><thead><tr><th>类型</th><th>协议://地址:端口</th><th>账号</th><th></th></tr></thead><tbody></tbody></table>
+  <h3>\u5ba2\u6237\u7aef\u5b9e\u4f8b <span class="hint" id="ver"></span></h3>
+  <table id="tb"><thead><tr><th>\u7c7b\u578b</th><th>\u534f\u8bae://\u5730\u5740:\u7aef\u53e3</th><th>\u8d26\u53f7</th><th></th></tr></thead><tbody></tbody></table>
   <div class="row" style="margin-top:8px">
    <select id="proto"><option value="http">http</option><option value="https">https</option></select>
-   <select id="kind"><option value="">自动识别</option><option value="qb">qBittorrent</option>
+   <select id="kind"><option value="">\u81ea\u52a8\u8bc6\u522b</option><option value="qb">qBittorrent</option>
    <option value="tr">Transmission</option></select>
-   <input id="host" placeholder="地址(域名或IP)" size="14"><input id="port" placeholder="端口" size="6">
-   <input id="user" placeholder="用户名" size="10"><input id="pw" placeholder="密码" size="12" type="password">
-   <label class="hint"><input type="checkbox" id="insec">跳过证书校验</label>
-   <button class="btn b4" onclick="addInst()">添加</button>
+   <input id="host" placeholder="\u5730\u5740(\u57df\u540d\u6216IP)" size="14"><input id="port" placeholder="\u7aef\u53e3" size="6">
+   <input id="user" placeholder="\u7528\u6237\u540d" size="10"><input id="pw" placeholder="\u5bc6\u7801" size="12" type="password">
+   <label class="hint"><input type="checkbox" id="insec">\u8df3\u8fc7\u8bc1\u4e66\u6821\u9a8c</label>
+   <button class="btn b4" onclick="addInst()">\u6dfb\u52a0</button>
   </div>
-  <div class="hint">选中某行可删除。配置存在本机 guiconfig.json（权限 0600）。</div>
+  <div class="hint">\u9009\u4e2d\u67d0\u884c\u53ef\u5220\u9664\u3002\u914d\u7f6e\u5b58\u5728\u672c\u673a guiconfig.json\uff08\u6743\u9650 0600\uff09\u3002</div>
  </div>
  <div class="card r">
-  <h3>任务</h3>
-  <div class="row"><span>旧 tracker 含</span><input id="old" size="26" placeholder="比如 old-tracker.example">
-   <span>期望新 tracker</span><input id="new_url" size="26"></div>
-  <div class="row"><span>新种子目录</span><input id="tdir" size="46" placeholder="站点新下载的 .torrent 放一起的目录">
-   <span class="hint">服务器在你那台机器上就填它看得见的目录</span></div>
-  <div class="row"><span>只处理含</span><input id="only" size="16">
-   <span>本次上限</span><input id="limit" size="5" value="0">
-   <span>校验超时秒</span><input id="budget" size="7" value="1800"></div>
-  <div class="row"><span>轮询秒</span><input id="poll" size="5" value="5">
-   <span>每个间隔秒</span><input id="sleep" size="5" value="1">
-   <span>连错几个收工</span><input id="maxfail" size="5" value="5">
-   <span>回滚 hash</span><input id="hash" size="18">
-   <button type="button" onclick="loadRb()">选回滚种子</button>
+  <h3>\u4efb\u52a1</h3>
+  <div class="row"><span>\u65e7 tracker \u542b</span><input id="old" size="26" placeholder="\u6bd4\u5982 old-tracker.example">
+   <span>\u671f\u671b\u65b0 tracker</span><input id="new_url" size="26"></div>
+  <div class="row"><span>\u65b0\u79cd\u5b50\u76ee\u5f55</span><input id="tdir" size="46" placeholder="\u7ad9\u70b9\u65b0\u4e0b\u8f7d\u7684 .torrent \u653e\u4e00\u8d77\u7684\u76ee\u5f55">
+   <span class="hint">\u670d\u52a1\u5668\u5728\u4f60\u90a3\u53f0\u673a\u5668\u4e0a\u5c31\u586b\u5b83\u770b\u5f97\u89c1\u7684\u76ee\u5f55</span></div>
+  <div class="row"><span>\u53ea\u5904\u7406\u542b</span><input id="only" size="16">
+   <span>\u672c\u6b21\u4e0a\u9650</span><input id="limit" size="5" value="0">
+   <span>\u6821\u9a8c\u8d85\u65f6\u79d2</span><input id="budget" size="7" value="1800"></div>
+  <div class="row"><span>\u8f6e\u8be2\u79d2</span><input id="poll" size="5" value="5">
+   <span>\u6bcf\u4e2a\u95f4\u9694\u79d2</span><input id="sleep" size="5" value="1">
+   <span>\u8fde\u9519\u51e0\u4e2a\u6536\u5de5</span><input id="maxfail" size="5" value="5">
+   <span>\u56de\u6eda hash</span><input id="hash" size="18">
+   <button type="button" onclick="loadRb()">\u9009\u56de\u6eda\u79cd\u5b50</button>
    <select id="rb" onchange="if(this.value)document.getElementById('hash').value=this.value"
-    style="max-width:380px"><option value="">（从有备份的中挑一个）</option></select>
-   <label><input type="checkbox" id="rbforce">遇不一致→强制覆盖</label>
-   <label><input type="checkbox" id="rbkeep">→保持不动</label></div>
+    style="max-width:380px"><option value="">\uff08\u4ece\u6709\u5907\u4efd\u7684\u4e2d\u6311\u4e00\u4e2a\uff09</option></select>
+   <label><input type="checkbox" id="rbforce">\u9047\u4e0d\u4e00\u81f4\u2192\u5f3a\u5236\u8986\u76d6</label>
+   <label><input type="checkbox" id="rbkeep">\u2192\u4fdd\u6301\u4e0d\u52a8</label></div>
   <div class="row">
-   <input id="sdir" size="30" placeholder="旧版工具文件夹（或旧 exe）的路径">
-   <button type="button" onclick="addSD()">指过来扫描</button>
-   <button type="button" onclick="impOld()" style="background:#7c3aed">一键导入旧版</button>
-   <span class="hint">「扫描」= 每次去看一眼旧目录；「导入」= 备份/实例/台账搬进新版，旧目录以后不用管</span></div>
+   <input id="sdir" size="30" placeholder="\u65e7\u7248\u5de5\u5177\u6587\u4ef6\u5939\uff08\u6216\u65e7 exe\uff09\u7684\u8def\u5f84">
+   <button type="button" onclick="addSD()">\u6307\u8fc7\u6765\u626b\u63cf</button>
+   <button type="button" onclick="impOld()" style="background:#7c3aed">\u4e00\u952e\u5bfc\u5165\u65e7\u7248</button>
+   <span class="hint">\u300c\u626b\u63cf\u300d= \u6bcf\u6b21\u53bb\u770b\u4e00\u773c\u65e7\u76ee\u5f55\uff1b\u300c\u5bfc\u5165\u300d= \u5907\u4efd/\u5b9e\u4f8b/\u53f0\u8d26\u642c\u8fdb\u65b0\u7248\uff0c\u65e7\u76ee\u5f55\u4ee5\u540e\u4e0d\u7528\u7ba1</span></div>
   <div class="row">
-   <label><input type="checkbox" id="seed" checked>校验通过就自动开始做种</label>
-   <label><input type="checkbox" id="nocap">TR 校验期不加 1KB/s 限速</label>
-   <label><input type="checkbox" id="ipoff">同 hash 不原地改、改用删除重建</label>
-   <label><input type="checkbox" id="confirm">我已确认，可以动真格</label></div>
+   <label><input type="checkbox" id="seed" checked>\u6821\u9a8c\u901a\u8fc7\u5c31\u81ea\u52a8\u5f00\u59cb\u505a\u79cd</label>
+   <label><input type="checkbox" id="nocap">TR \u6821\u9a8c\u671f\u4e0d\u52a0 1KB/s \u9650\u901f</label>
+   <label><input type="checkbox" id="ipoff">\u540c hash \u4e0d\u539f\u5730\u6539\u3001\u6539\u7528\u5220\u9664\u91cd\u5efa</label>
+   <label><input type="checkbox" id="confirm">\u6211\u5df2\u786e\u8ba4\uff0c\u53ef\u4ee5\u52a8\u771f\u683c</label></div>
   <div>
-   <button class="btn b1" onclick="go('doctor')">① 体检</button>
-   <button class="btn b2" onclick="go('dry')">② 演练</button>
-   <button class="btn b3" onclick="go('run')">③ 真执行</button>
-   <button class="btn b4" onclick="go('status')">台账</button>
-   <button class="btn b5" onclick="go('rollback')">回滚这个 hash</button>
-   <button class="btn b5" onclick="go('repair')">一键修复丢失种子</button>
+   <button class="btn b1" onclick="go('doctor')">\u2460 \u4f53\u68c0</button>
+   <button class="btn b2" onclick="go('dry')">\u2461 \u6f14\u7ec3</button>
+   <button class="btn b3" onclick="go('run')">\u2462 \u771f\u6267\u884c</button>
+   <button class="btn b4" onclick="go('status')">\u53f0\u8d26</button>
+   <button class="btn b5" onclick="go('rollback')">\u56de\u6eda\u8fd9\u4e2a hash</button>
+   <button class="btn b5" onclick="go('repair')">\u4e00\u952e\u4fee\u590d\u4e22\u5931\u79cd\u5b50</button>
   </div>
  </div>
 </main>
 <main><div class="card" style="flex:1 1 100%">
- <h3>日志 <span class="hint" id="stat">空闲</span>
-  <button class="btn b4" style="float:right" onclick="clearLog()">清空日志</button></h3>
- <div class="log" id="log">还没开工。顺序：加实例 → ① 体检 → ② 演练 → 勾“我已确认” → ③ 真执行。</div>
+ <h3>\u65e5\u5fd7 <span class="hint" id="stat">\u7a7a\u95f2</span>
+  <button class="btn b4" style="float:right" onclick="clearLog()">\u6e05\u7a7a\u65e5\u5fd7</button></h3>
+ <div class="log" id="log">\u8fd8\u6ca1\u5f00\u5de5\u3002\u987a\u5e8f\uff1a\u52a0\u5b9e\u4f8b \u2192 \u2460 \u4f53\u68c0 \u2192 \u2461 \u6f14\u7ec3 \u2192 \u52fe\u201c\u6211\u5df2\u786e\u8ba4\u201d \u2192 \u2462 \u771f\u6267\u884c\u3002</div>
 </div></main>
 <script>
 let S={instances:[],sel:-1};
@@ -725,12 +744,12 @@ async function api(p,body){const r=await fetch(p,{method:body?'POST':'GET',
   headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});return r.json();}
 function render(){const b=document.querySelector('#tb tbody');b.innerHTML='';
  S.instances.forEach((x,i)=>{const tr=document.createElement('tr');if(i==S.sel)tr.className='sel';
-  tr.innerHTML=`<td>${x.kind||'自动'}</td><td>${x.scheme||'http'}://${x.host}:${x.port}</td><td>${x.user||'-'}</td>
-   <td><button class="btn b4" onclick="del(${i})">删</button></td>`;
+  tr.innerHTML=`<td>${x.kind||'\u81ea\u52a8'}</td><td>${x.scheme||'http'}://${x.host}:${x.port}</td><td>${x.user||'-'}</td>
+   <td><button class="btn b4" onclick="del(${i})">\u5220</button></td>`;
   tr.onclick=()=>{S.sel=i;render();};b.appendChild(tr);});}
 function addInst(){const h=host.value.trim(),p=parseInt(port.value||0);
- if(!h||!p){alert('地址和端口要填');return;}
- if(!/^https?:\/\//.test(h) && /:\/\//.test(h)){alert('地址只填域名或IP，协议用左边下拉框');return;}
+ if(!h||!p){alert('\u5730\u5740\u548c\u7aef\u53e3\u8981\u586b');return;}
+ if(!/^https?:\/\//.test(h) && /:\/\//.test(h)){alert('\u5730\u5740\u53ea\u586b\u57df\u540d\u6216IP\uff0c\u534f\u8bae\u7528\u5de6\u8fb9\u4e0b\u62c9\u6846');return;}
  S.instances.push({scheme:proto.value,kind:kind.value,host:h.replace(/^\w+:\/\//,'').replace(/\/+$/,''),
    port:p,insecure:document.getElementById('insec').checked,
    user:user.value.trim(),password:pw.value});
@@ -742,19 +761,22 @@ function form(){return{old:old.value,new_url:new_url.value,tdir:tdir.value,only:
  inplace:document.getElementById('ipoff').checked?'off':'auto',
  rb_force:rbforce.checked,rb_keep:rbkeep.checked};}
 async function go(c){const r=await api('/api/run',{cmd:c,form:form(),instances:S.instances});
- if(r.err)log0('★ '+r.err);}
+ if(r.err)log0('\u2605 '+r.err);}
 async function stopTask(){await api('/api/stop',{});}
+async function quitApp(){if(!confirm('\u786e\u5b9a\u9000\u51fa\uff1f\u6b63\u5728\u8dd1\u7684\u4efb\u52a1\u4f1a\u88ab\u4e2d\u65ad'))return;
+ try{await api('/api/shutdown',{});}catch(e){}
+ document.documentElement.innerHTML='<head><title>\u5df2\u9000\u51fa</title></head><body style="font-family:system-ui;padding:60px;background:#f5f6f8"><h2>\u7a0b\u5e8f\u5df2\u9000\u51fa\uff0c\u53ef\u4ee5\u5173\u95ed\u8fd9\u4e2a\u6807\u7b7e\u9875\u4e86\u3002</h2></body>';return false;}
 let idx=0;
 function clearLog(){const e=document.getElementById('log');e.innerHTML='';
- log0('（日志区已清空；后台要是有任务在跑，新日志会继续出现）');}
+ log0('\uff08\u65e5\u5fd7\u533a\u5df2\u6e05\u7a7a\uff1b\u540e\u53f0\u8981\u662f\u6709\u4efb\u52a1\u5728\u8dd1\uff0c\u65b0\u65e5\u5fd7\u4f1a\u7ee7\u7eed\u51fa\u73b0\uff09');}
 function log0(t){const e=document.getElementById('log');const d=document.createElement('div');
- d.textContent=t;if(/[✗★⚠]|停止/.test(t))d.className='w';if(/✓/.test(t))d.className='g';
+ d.textContent=t;if(/[\u2717\u2605\u26a0]|\u505c\u6b62/.test(t))d.className='w';if(/\u2713/.test(t))d.className='g';
  e.appendChild(d);e.scrollTop=e.scrollHeight;}
 async function tick(){try{const s=await api('/api/state?after='+idx);
   idx=s.index;s.lines.forEach(l=>{if(l!=null)log0(l)});
-  document.getElementById('stat').textContent=s.busy?'正在跑…（别关页面）':'空闲';
-  document.getElementById('busy').textContent=s.busy?'任务进行中':'';
-  if(s.version){document.title='tracker替换 '+s.version+' · 批量换 tracker';
+  document.getElementById('stat').textContent=s.busy?'\u6b63\u5728\u8dd1\u2026\uff08\u522b\u5173\u9875\u9762\uff09':'\u7a7a\u95f2';
+  document.getElementById('busy').textContent=s.busy?'\u4efb\u52a1\u8fdb\u884c\u4e2d':'';
+  if(s.version){document.title='tracker\u66ff\u6362 '+s.version+' \u00b7 \u6279\u91cf\u6362 tracker';
    const v=document.getElementById('ver');if(v)v.textContent='v'+s.version;}
   if(s.instances!==undefined&&S.instances.length==0){S.instances=s.instances;render();}
  }catch(e){}}
@@ -762,38 +784,109 @@ setInterval(tick,700);
 async function loadRb(){const s=document.getElementById('rb');let rows=[];
  try{rows=await api('/api/rblist');}catch(e){}
  s.innerHTML='';const n0=document.createElement('option');
- n0.value='';n0.textContent=rows.length?'点一行把 hash 填进输入框':'（没有备份：没跑过 apply 就没有可回滚的）';
+ n0.value='';n0.textContent=rows.length?'\u70b9\u4e00\u884c\u628a hash \u586b\u8fdb\u8f93\u5165\u6846':'\uff08\u6ca1\u6709\u5907\u4efd\uff1a\u6ca1\u8dd1\u8fc7 apply \u5c31\u6ca1\u6709\u53ef\u56de\u6eda\u7684\uff09';
  s.appendChild(n0);
  rows.forEach(x=>{const o=document.createElement('option');o.value=x.hash;
-  o.textContent=(x.failed?'✗':'✓')+' '+x.hash.slice(0,10)+' '+((x.name||'').slice(0,24))+' ['+x.inst+']';
+  o.textContent=(x.failed?'\u2717':'\u2713')+' '+x.hash.slice(0,10)+' '+((x.name||'').slice(0,24))+' ['+x.inst+']';
   s.appendChild(o)});}
 async function addSD(){const d=document.getElementById('sdir').value.trim();
- if(!d){alert('先把旧版工具文件夹（或旧 exe）的路径填进来');return;}
  const r=await api('/api/statedirs',{dir:d});
  if(r.err)alert(r.err);
  else{document.getElementById('sdir').value='';loadRb();}}
 async function impOld(){const d=document.getElementById('sdir').value.trim();
- if(!d){alert('先把旧版工具文件夹（或旧 exe）的路径填进来');return;}
- if(!confirm('把旧版的备份、客户端实例、台账复制进新版？\n旧版文件夹原样不动，导完就可以不管它了。'))return;
+ if(!confirm('\u628a\u65e7\u7248\u7684\u5907\u4efd\u3001\u5ba2\u6237\u7aef\u5b9e\u4f8b\u3001\u53f0\u8d26\u590d\u5236\u8fdb\u65b0\u7248\uff1f\n\u65e7\u7248\u6587\u4ef6\u5939\u539f\u6837\u4e0d\u52a8\uff0c\u5bfc\u5b8c\u5c31\u53ef\u4ee5\u4e0d\u7ba1\u5b83\u4e86\u3002'))return;
  const r=await api('/api/importold',{dir:d});
  if(r.err)alert(r.err);
  else{document.getElementById('sdir').value='';
   if(r.instances){S.instances=r.instances;render();}
   if(r.tdir&&!document.getElementById('tdir').value.trim())document.getElementById('tdir').value=r.tdir;
   loadRb();
-  alert('导入完成：备份 +'+r.files+'（跳过已有 '+r.same+'）、实例 +'+r.inst+'（已列进上面列表）、台账 +'+r.ledger+(r.sdirs?'、备份目录 +'+r.sdirs:'')+(r.tdir?'\n新种子目录已填：'+r.tdir:''));}}
-(async()=>{const s=await api('/api/state?after=0');S.instances=s.instances||[];render();
+  alert('\u5bfc\u5165\u5b8c\u6210\uff1a\u5907\u4efd +'+r.files+'\uff08\u8df3\u8fc7\u5df2\u6709 '+r.same+'\uff09\u3001\u5b9e\u4f8b +'+r.inst+'\uff08\u5df2\u5217\u8fdb\u4e0a\u9762\u5217\u8868\uff09\u3001\u53f0\u8d26 +'+r.ledger+(r.sdirs?'\u3001\u5907\u4efd\u76ee\u5f55 +'+r.sdirs:'')+(r.tdir?'\n\u65b0\u79cd\u5b50\u76ee\u5f55\u5df2\u586b\uff1a'+r.tdir:''));}}
+(async()=>{const s=await api('/api/state?after=0');S.instances=s.instances||[];render();try{loadRb();}catch(e){}
   ['old','new_url','tdir','only','limit','budget','poll','sleep','maxfail','hash'].forEach(k=>{
    if(s.form&&s.form[k]!==undefined)document.getElementById(k).value=s.form[k];});
   seed.checked=!!s.form.seed_after;nocap.checked=!!s.form.nocap;})();
+(async()=>{try{const r=await api('/api/oldscan');if(r&&r.found&&r.found.length){const el=document.getElementById('sdir');if(el)el.placeholder='\u5df2\u53d1\u73b0 '+r.found[0]+'\uff0c\u7559\u7a7a\u70b9\u5bfc\u5165\u5373\u53ef';}}catch(e){}})();
 </script></body></html>"""
 
 
-def run_web(conf, port, open_browser=True):
+_OLD_MNT = "/oldver"          # 容器里约定挂载点：-v /宿主机旧版目录:/oldver:ro
+
+
+def _old_markers(d):
+    return (os.path.isdir(os.path.join(d, "backup"))
+            or os.path.isfile(os.path.join(d, "guiconfig.json")))
+
+
+def _scan_old():
+    """/oldver 本身或其一层子目录里，找出带旧版特征(backup/或guiconfig.json)的目录。"""
+    out = []
+    if not os.path.isdir(_OLD_MNT):
+        return out
+    if _old_markers(_OLD_MNT):
+        out.append(_OLD_MNT)
+    try:
+        for n in sorted(os.listdir(_OLD_MNT)):
+            pth = os.path.join(_OLD_MNT, n)
+            if os.path.isdir(pth) and _old_markers(pth) and pth not in out:
+                out.append(pth)
+    except OSError:
+        pass
+    # 外层文件夹带 guiconfig.json 时，它里面的 state 子目录不算第二个旧版
+    if len(out) > 1:
+        keep = []
+        for d in out:
+            par = os.path.dirname(d)
+            if par in out and os.path.isfile(os.path.join(par, "guiconfig.json")) \
+                    and os.path.basename(d) in ("state", "backup"):
+                continue
+            keep.append(d)
+        out = keep or out
+    return out
+
+
+def _pick_old(raw):
+    """返回 (目录, 错误)。留空/点号/就填/oldver -> 自动用挂载点发现的结果。"""
+    d = (raw or "").strip().strip('"').strip("'")
+    cands = _scan_old()
+    if not d or d in (".", _OLD_MNT):
+        if not cands:
+            if os.path.isdir(_OLD_MNT):
+                return None, ("/oldver 里没认出旧版特征（backup/ 或 guiconfig.json）；"
+                              "请确认 -v 挂的是旧版工具文件夹本身")
+            return None, ("容器里看不到旧版文件夹：启动时加 -v /宿主机旧版目录:/oldver:ro "
+                          "挂进来，路径留空就能一键导入")
+        if d == _OLD_MNT and cands[0] == _OLD_MNT:
+            return _OLD_MNT, None
+        if len(cands) > 1:
+            return None, "/oldver 下发现多个旧版目录，请在路径里填其中一个：" + "、".join(cands)
+        return cands[0], None
+    if os.path.isdir(d):
+        return d, None
+    if cands:
+        return cands[0], None
+    hint = ""
+    if os.path.isdir("/data") and not d.startswith("/"):
+        hint = "；注意这是容器环境，宿主机路径要先进过 -v 挂载（旧版工具建议挂到 /oldver）"
+    return None, ("找不到目录 %s%s" % (d, hint))
+
+
+def run_web(conf, port, open_browser=True, host="127.0.0.1", user=None, pw=None):
+    import base64 as _b64
     import http.server
+    import hmac as _hmac
+    import secrets as _secrets
     import socketserver
 
-    state = {"engine": None, "conf": conf}
+    state = {"engine": None, "conf": conf, "sid": None}
+    login_on = host not in ("127.0.0.1", "localhost", "::1", "")
+    cred_user = user or os.environ.get("TR_UI_USER") or "admin"
+    cred_pw = pw or os.environ.get("TR_UI_PASS") or ""
+    pw_random = False
+    if login_on and not cred_pw:
+        cred_pw = _secrets.token_urlsafe(9)
+        pw_random = True
+    cred_pair = ("%s:%s" % (cred_user, cred_pw)).encode("utf-8")
 
     class H(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -810,6 +903,10 @@ def run_web(conf, port, open_browser=True):
             self.wfile.write(raw)
 
         def _html(self, raw):
+            if isinstance(raw, bytes):
+                raw = _expand(raw.decode("utf-8")).encode("utf-8")
+            else:
+                raw = _expand(raw)
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(raw)))
@@ -823,10 +920,75 @@ def run_web(conf, port, open_browser=True):
             except Exception:
                 return {}
 
+        def _login_page(self, bad=False, uname=""):
+            err = ("<p style='color:#c0392b;margin:12px 0 0'>\u8d26\u53f7\u6216\u5bc6\u7801\u4e0d\u5bf9</p>"
+                   if bad else "")
+            uname2 = _html_escape(uname)
+            page = ("""<!doctype html><html><head><meta charset="utf-8">"""
+                    """<title>tracker\u66ff\u6362 \u00b7 \u767b\u5f55</title></head>"""
+                    """<body style="font-family:system-ui,sans-serif;background:#f5f6f8">"""
+                    """<div style="max-width:320px;margin:14vh auto;padding:28px;background:#fff;"""
+                    """border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.08)">"""
+                    """<h2 style="margin:0 0 4px">tracker\u66ff\u6362</h2>"""
+                    """<p style="color:#777;margin:0 0 18px">\u8bf7\u767b\u5f55</p>"""
+                    """<form method="post" action="/login">"""
+                    """<input name="user" autocomplete="username" size="28" value="%s" """
+                    """placeholder="\u8d26\u53f7" """
+                    """style="width:100%%;padding:8px;margin:0 0 10px;box-sizing:border-box"><br>"""
+                    """<input name="pass" type="password" autocomplete="current-password" size="28" """
+                    """placeholder="\u5bc6\u7801" style="width:100%%;"""
+                    """padding:8px;margin:0 0 14px;box-sizing:border-box"><br>"""
+                    """<button type="submit" style="width:100%%;padding:9px;background:#2f7d4f;"""
+                    """color:#fff;border:0;border-radius:6px;font-size:15px">\u767b\u5f55</button>"""
+                    """</form>%s</div></body></html>""" % (uname2, err))
+            return self._html(page.encode("utf-8"))
+
+        def _login(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            form = urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
+            gu = (form.get("user") or [""])[0]
+            gp = (form.get("pass") or [""])[0]
+            if not (_hmac.compare_digest(gu, cred_user)
+                    and _hmac.compare_digest(gp.encode("utf-8"), cred_pw.encode("utf-8"))):
+                return self._login_page(bad=True, uname=gu)
+            state["sid"] = _secrets.token_hex(16)
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.send_header("Set-Cookie",
+                             "tr_sid=%s; Path=/; HttpOnly; SameSite=Lax" % state["sid"])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _guard(self):
+            if not login_on:
+                return True
+            got = (self.headers.get("Authorization") or "").strip()
+            if got.startswith("Basic "):
+                try:
+                    if _hmac.compare_digest(_b64.b64decode(got[6:]), cred_pair):
+                        return True
+                except Exception:
+                    pass
+            sid = state.get("sid")
+            if sid:
+                for part in (self.headers.get("Cookie") or "").split(";"):
+                    k, _, v = part.strip().partition("=")
+                    if k == "tr_sid" and _hmac.compare_digest(v, sid):
+                        return True
+            if self.path.startswith("/api/"):
+                self._json({"error": "\u672a\u767b\u5f55", "login": True}, 401)
+                return False
+            self._login_page()
+            return False
+
         def do_GET(self):
+            if not self._guard():
+                return
             eng = state["engine"]
             if self.path.startswith("/api/rblist"):
                 return self._json(tracker_replace.scan_backups())
+            if self.path.startswith("/api/oldscan"):
+                return self._json({"found": _scan_old()})
             if self.path.startswith("/api/state"):
                 after = 0
                 try:
@@ -844,11 +1006,18 @@ def run_web(conf, port, open_browser=True):
             return self._json({"err": "nope"}, 404)
 
         def do_POST(self):
+            if self.path == "/login":
+                return self._login()
+            if not self._guard():
+                return
             eng = state["engine"]
             b = self._body()
             if self.path == "/api/statedirs":
+                d, errtxt = _pick_old(b.get("dir", ""))
+                if errtxt:
+                    return self._json({"err": errtxt})
                 try:
-                    p = tracker_replace.add_state_dir(b.get("dir", ""))
+                    p = tracker_replace.add_state_dir(d)
                 except ValueError as e:
                     return self._json({"err": str(e)})
                 try:            # 同步内存快照，免得下次存配置把新目录冲掉
@@ -858,8 +1027,11 @@ def run_web(conf, port, open_browser=True):
                     pass
                 return self._json({"dir": p})
             if self.path == "/api/importold":
+                d, errtxt = _pick_old(b.get("dir", ""))
+                if errtxt:
+                    return self._json({"err": errtxt})
                 try:
-                    rep = tracker_replace.import_old(b.get("dir", ""))
+                    rep = tracker_replace.import_old(d)
                 except ValueError as e:
                     return self._json({"err": str(e)})
                 try:            # 实例可能被导入扩充，同步内存快照
@@ -902,19 +1074,33 @@ def run_web(conf, port, open_browser=True):
                 return self._json({"ok": ok})
             if self.path == "/api/stop":
                 return self._json({"ok": eng.stop()})
+            if self.path == "/api/shutdown":
+                resp = self._json({"ok": True})
+                threading.Timer(0.4, lambda: os._exit(0)).start()
+                return resp
             return self._json({"err": "nope"}, 404)
 
     class Srv(socketserver.ThreadingMixIn, http.server.HTTPServer):
         daemon_threads = True
         allow_reuse_address = True
+        def handle_error(self, req, client):
+            import traceback as _tb
+            _tb.print_exc()
 
-    srv = Srv(("127.0.0.1", port), H)
+    srv = Srv((host, port), H)
     eng = Engine()
     state["engine"] = eng
-    url = "http://127.0.0.1:%d/" % srv.server_address[1]
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    url = "http://%s:%d/" % (shown, srv.server_address[1])
     print("=" * 58)
-    print("  窗口已就绪，浏览器打开：  %s" % url)
-    print("  （只监听本机，别人连不进来；这窗口关掉就停）")
+    print("  \u7f51\u9875\u5df2\u5c31\u7eea\uff0c\u6d4f\u89c8\u5668\u6253\u5f00\uff1a  %s" % url)
+    if login_on:
+        print("  \u767b\u5f55\u8d26\u53f7\uff1a%s" % cred_user)
+        print("  \u767b\u5f55\u5bc6\u7801\uff1a%s%s" % (cred_pw,
+              "\uff08\u968f\u673a\u751f\u6210\uff1b\u60f3\u81ea\u5b9a\u5c31\u8bbe TR_UI_PASS\uff09"
+              if pw_random else ""))
+    else:
+        print("  \uff08\u53ea\u76d1\u542c\u672c\u673a\uff0c\u522b\u4eba\u8fde\u4e0d\u8fdb\u6765\uff1b\u9875\u9762\u53f3\u4e0a\u89d2\u300c\u23fb \u9000\u51fa\u300d\u53ef\u5173\u7a0b\u5e8f\uff09")
     print("=" * 58, flush=True)
     if open_browser:
         try:
@@ -975,4 +1161,7 @@ def run(a):
             print("---- 自检结论：%s ----" % ("通过" if not box.get("fail") else "有问题"))
         return rc or 0
     return run_web(conf, getattr(a, "ui_port", 0) or 0,
-                   open_browser=not getattr(a, "no_browser", False)) or 0
+                   open_browser=not getattr(a, "no_browser", False),
+                   host=getattr(a, "ui_host", "127.0.0.1") or "127.0.0.1",
+                   user=getattr(a, "ui_user", "") or None,
+                   pw=getattr(a, "ui_pass", "") or None) or 0

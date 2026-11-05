@@ -1,0 +1,72 @@
+================================================================
+ tracker替换 —— macOS 使用说明（MACOS.txt）
+================================================================
+
+【你要带的东西】
+  整个文件夹拷到 U 盘都行，至少要有：
+    tracker_replace.py        主程序
+    tracker_ui.py             窗口/网页界面
+  这两个文件放在一起就够了，不用装任何第三方依赖（只用 Python 自带库）。
+
+【第 1 步：Mac 上装 Python 3（只需一次）】
+  终端（启动台搜索"终端"）里输入：
+      python3 -m ensurepip
+  或者装完整版：去 https://www.python.org/downloads/ 下载 .pkg 双击安装。
+  （macOS 自带 python3 的，这步可跳过。）
+
+【第 2 步：解除"未认证开发者"拦截（只需一次）】
+  从 U 盘/微信传过来的脚本，Mac 第一次会被 Gatekeeper 拦。
+  终端进入你的工作目录后执行：
+      xattr -dr com.apple.quarantine .
+  以后再改文件就不用重复了。
+
+【第 3 步：起窗口（推荐：网页窗口，零依赖）】
+      python3 tracker_replace.py ui
+  会自动打开浏览器窗口。手动打开就访问它印出来的 http://127.0.0.1:xxxxx/
+
+  双击党：双击 tracker-replace-ui.command 等同上面那条命令。
+  （tkinter 原生窗口：tracker-replace-gui.command，需要 tkinter 版 Python。）
+
+【第 4 步：Docker（有 Docker Desktop/OrbStack 的 Mac 最省事）】
+      docker run -d --name tracker-replace --restart unless-stopped \
+          -p 127.0.0.1:8642:8642 -v tr-data:/data \
+          ghcr.io/littleskyfish/tracker-replace:latest
+  浏览器打开 http://127.0.0.1:8642 即可。
+  想让局域网其他设备也能开：把 -p 改成 8642:8642（去掉 127.0.0.1: 前缀），
+  页面会要账号密码——默认 admin / replace，加 -e TR_UI_PASS="你自己的密码" 改掉。
+  qBittorrent/Transmission 装在这台 Mac 上时，实例地址填 host.docker.internal
+  （Mac 的 Docker Desktop 自带这个别名，不用加 --add-host）。
+  设置、备份、台账都在 tr-data 卷里，升级镜像 = docker rm -f 后重新 run，家当都在。
+  要用「新种子目录」的话必须把它映射进容器才能在页面里填：上面的 docker run 加一段
+  -v /你的新种子目录:/torrents:ro，页面「新种子目录」一栏就填 /torrents。
+
+【自检（可选）】
+  把 tests/ 一起拷过来，在仓库目录里跑：
+      python3 tests/selftest.py
+  全过会打印 172/172。
+
+【命令行用法（不想开窗口的话）】
+  自检一个实例：
+      python3 tracker_replace.py doctor --host 127.0.0.1 --port 8080 --user me --old "tracker.example.com"
+  改 tracker（先演练再动手）：
+      python3 tracker_replace.py apply --config config.json --old "旧地址" --new "新地址"
+      加 --run 才真执行。
+
+【打包成单文件（想给没有 Python 的 Mac 用）】
+  仓库里带了 build_mac.sh，在有 Homebrew + Python 的 Mac 上跑：
+      sh build_mac.sh
+  产物在 dist/，拷目标机即可（跨大版本可能要重打，见 README「Mac 版怎么拿」）。
+
+【常见问题】
+  Q: ui 打不开页面？
+  A: 看终端有没有打印地址；确认 8642（或它自己挑的端口）没被占；
+     防火墙弹窗选"允许"。
+
+  Q: Docker 里连不上 Mac 上的 qBittorrent？
+  A: 实例地址填 host.docker.internal，不是 127.0.0.1（容器里的 127.0.0.1 是容器自己）。
+
+  Q: 改了没效果/怕改坏？
+  A: 所有改动都有备份 + 台账：rollback 可回滚，recover 可找回，见 README。
+
+================================================================
+ 详细文档全在 README.md（网页窗口、命令行、Docker、版本修复记录）。

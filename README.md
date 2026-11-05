@@ -252,3 +252,41 @@ tracker-replace/
 > 真机连通后建议再跑一次 `doctor` + `apply`（演练）复核。
 
 
+
+
+---
+
+================================================================
+ Docker / 网页版（NAS 常开首选）
+================================================================
+
+【一条命令跑起来】
+
+    docker run -d --name tracker-replace \
+      -v tr-data:/data \
+      -p 8642:8642 \
+      -e TR_UI_USER=admin \
+      -e TR_UI_PASS='自己定一个强密码' \
+      --restart unless-stopped \
+      ghcr.io/littleskyfish/tracker-replace:1.12
+
+浏览器开 http://NAS的IP:8642/ ，输账号密码登录。
+不设 TR_UI_PASS 则每次启动随机生成，用 docker logs tracker-replace 查看。
+也可用仓库自带的 docker-compose.yml（改密码/端口/路径都在里面注释好）。
+
+【挂目录】
+- /data            实例配置、种子备份、台账都存这里，升级镜像不丢
+- 新种子目录       宿主机路径要映射进容器才能填：
+                   -v /volume1/downloads/torrents:/torrents （网页里填 /torrents）
+- 一键导入旧版     -v /旧版工具文件夹:/oldver:ro
+                   打开网页自动认出，路径留空点导入即可
+
+【安全】
+- 监听 0.0.0.0 时网页强制登录；只在电脑上双击运行（本机 127.0.0.1）则无登录，跟旧版一样
+- 只放行指定机器访问：iptables -I DOCKER-USER -p tcp --dport 8642 ! -s 允许的IP -j DROP
+
+【v1.12 相对 v1.11】
+- 全新 Docker/网页版：账号登录、⏻退出按钮、容器挂载、compose 模板
+- 修：网页版内嵌脚本一处断行导致所有按钮失灵的致命 bug
+- 修：下载器地址加错时从挂死 5 分钟改为 8 秒内报"连不上"
+- 修：登录失败后账号被清空、重输密码也进不去

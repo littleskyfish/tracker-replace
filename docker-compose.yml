@@ -1,0 +1,27 @@
+# tracker替换 网页版 compose 模板
+# 用法：docker compose up -d --build   然后局域网设备浏览器打开 http://这台机器的IP:8642
+# 首次启动看登录密码：docker compose logs tracker-replace
+services:
+  tracker-replace:
+    build: .
+    image: tracker-replace:local
+    container_name: tracker-replace
+    restart: unless-stopped
+    ports:
+      # 对整个局域网开放（有网页登录保护）
+      - "8642:8642"
+      # 只想本机可开就换成：- "127.0.0.1:8642:8642"
+    environment:
+      # 建议改成你自己的账号密码；TR_UI_PASS 不填则每次启动随机生成
+      # （随机密码看日志：docker compose logs tracker-replace）
+      TR_UI_USER: ""
+      TR_UI_PASS: ""
+    volumes:
+      # 实例配置 / 种子备份 / 台账持久化，升级镜像不丢
+      - tr-data:/data
+      # 「新种子目录」要映射进容器才能在网页里填：左边是宿主机路径，右边随便起，网页里填右边
+      # 例：- /volume1/downloads/torrents:/torrents
+      # 「一键导入旧版」用：把旧版工具文件夹挂到 /oldver，网页里路径留空即可自动认出
+      # 例：- /volume1/@appstore/tracker-tool:/oldver:ro
+volumes:
+  tr-data:

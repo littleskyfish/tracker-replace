@@ -1,0 +1,4 @@
+# 构建镜像只 COPY 两个脚本，其余一律不进上下文（防止凭据/数据被误打包）
+*
+!tracker_replace.py
+!tracker_ui.py

@@ -47,6 +47,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import ssl
 import sys
 import time
@@ -55,7 +56,7 @@ import binascii
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
-VERSION = "1.11"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+VERSION = "1.12"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
 
 def _base_dir():
     """程序所在目录。PyInstaller 单文件模式下 __file__ 指向退出就销毁的临时解压
@@ -239,8 +240,9 @@ class _StdClient(object):
     """只用标准库的 HTTP 客户端，接口模仿 requests（.get/.post/.auth/.headers）。
     支持 params / data(表单) / json / files(multipart) / Basic 认证 / cookie / 302。"""
 
-    def __init__(self, timeout=60, insecure=False):
+    def __init__(self, timeout=60, insecure=False, connect_timeout=8):
         self.timeout = timeout
+        self.connect_timeout = connect_timeout        # 建连单独限时：地址加错/机器不可达时快速失败，别拿读超时长等
         self.auth = None
         self.headers = {}
         self.cookies = {}
@@ -248,17 +250,25 @@ class _StdClient(object):
         self._pool = {}                               # (scheme,host,port) -> 复用连接；Windows 频繁开关连接会把本地端口耗进 TIME_WAIT（WinError 10048）
 
     def _conn(self, scheme, host, port, timeout=None):
-        """按协议建连接：https 默认校验证书，insecure=True 才跳过。"""
+        """按协议建连接：https 默认校验证书，insecure=True 才跳过。
+        先用短超时把 TCP 连上（连不上立刻抛，不占读超时），成功后再换回读超时。"""
         to = timeout or self.timeout
+        raw_sk = socket.create_connection((host, port), self.connect_timeout)
         if scheme != "https":
-            return http.client.HTTPConnection(host, port, timeout=to)
-        kw = {}
+            conn = http.client.HTTPConnection(host, port, timeout=to)
+            conn.sock = raw_sk
+            conn.sock.settimeout(to)
+            return conn
         if self.insecure:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
-            kw["context"] = ctx
-        return http.client.HTTPSConnection(host, port, timeout=to, **kw)
+        else:
+            ctx = ssl.create_default_context()
+        conn = http.client.HTTPSConnection(host, port, timeout=to)
+        conn.sock = ctx.wrap_socket(raw_sk, server_hostname=host)
+        conn.sock.settimeout(to)
+        return conn
 
     def _cookies(self):
         return "; ".join("%s=%s" % kv for kv in self.cookies.items())
@@ -271,7 +281,11 @@ class _StdClient(object):
         for attempt in range(5):
             conn = self._pool.get(key)
             if conn is None:
-                conn = self._conn(scheme, host, port, timeout)
+                try:
+                    conn = self._conn(scheme, host, port, timeout)
+                except Exception as e:
+                    # 建连阶段就失败（地址错/机器不可达/端口没开）：重试只会白白拖几分钟，直接失败
+                    raise ConnectionError("连不上 %s:%s（%s）" % (host, port, str(e)[:60])) from e
                 self._pool[key] = conn
             try:
                 conn.request(method, path, body=body, headers=hd)
@@ -1761,6 +1775,8 @@ def normalize_pick(d):
             return sd
         if os.path.basename(b) == "state" and os.path.isdir(os.path.join(b, "backup")):
             return b
+        if os.path.isdir(os.path.join(b, "backup")):
+            return b          # 容器挂载形态：-v 把旧版 state 目录直接挂成某个挂载点
     return ""
 
 
@@ -2431,6 +2447,12 @@ def build_parser():
                     help="ui 子命令的端口（默认自己挑空闲端口；只监听 127.0.0.1）")
     ap.add_argument("--no-browser", dest="no_browser", action="store_true",
                     help="ui 子命令不要自动开浏览器")
+    ap.add_argument("--ui-host", dest="ui_host", default="127.0.0.1",
+                    help="ui 子命令监听地址（默认只监听本机；0.0.0.0 对局域网开放，此时强制网页登录）")
+    ap.add_argument("--ui-user", dest="ui_user", default="",
+                    help="ui 对外开放时的登录账号（默认 admin，也可用 TR_UI_USER）")
+    ap.add_argument("--ui-pass", dest="ui_pass", default="",
+                    help="ui 对外开放时的登录密码（不设则随机生成并打印一次，也可用 TR_UI_PASS）")
     ap.add_argument("--selftest", default="", help=argparse.SUPPRESS)
     ap.add_argument("--hash", default="", help="rollback 用：完整 info_hash 或至少 6 位前缀；不给则列出全部可回滚种子")
     ap.add_argument("--to-old", dest="to_old", action="store_true", help="rollback 时换回旧 tracker")
