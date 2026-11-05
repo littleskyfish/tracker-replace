@@ -1,1 +1,170 @@
-IyB0cmFja2Vy5pu/5o2iIOKAlOKAlCDmibnph4/mm7/mjaIgdHJhY2tlcu+8iHFCaXR0b3JyZW50IC8gVHJhbnNtaXNzaW9u77yJCgrnp4HmnInnp43lrZDnmoQgdHJhY2tlciBVUkwg6YeM5bimIHBhc3NrZXnvvIznq5nngrnmjaLkuoYgYW5ub3VuY2Ug5LmL5ZCO5a6i5oi356uv6YeM6YKj5om56ICB56eN5a2Q5bCx5bqf5LqG44CCCnRyYWNrZXIgVVJMIOWcqCBgLnRvcnJlbnRgIOeahCBpbmZvIOauteS5i+Wklu+8jOaNouWugyAqKmluZm9faGFzaCDkuI3lj5gqKu+8jOacrOi0qOaYryLmlLnkuKrlrZfnrKbkuLIi4oCU4oCUCui/meS4quW3peWFt+aKiuWug+WPmOaIkOS4gOmUruaJuemHj++8muaMiSBoYXNoIOmFjeWvueaWsOaXp+enjeWtkO+8jCoq55u05o6l5Y6f5Zyw57yW6L6RIHRyYWNrZXIqKu+8iHFCIDQuMSsg5a6Y5pa5CmVkaXRUcmFja2VyIC8gVFIgc2V0VHJhY2tlcnPvvInvvIzkuI3liKDnp43lrZDjgIHkuI3mmoLlgZzjgIHpm7bnrYnlvoXvvJvlubbljIXlip7mibnph4/or6XmnInnmoTmtLvvvJroh6rliqjorqQK5a6i5oi356uv5ZKM54mI5pys44CB6Zu25Zue5rWB5a6I5oqk44CB5Y+w6LSm5pat54K557ut6LeR44CB5Ye66Zeu6aKY5LiA6ZSu5Zue5rua44CCCgotICoq6Zu256Gs57yW56CBKirvvJrkuI3luKbku7vkvZUgSVAgLyDnq6/lj6MgLyDotKblj7fvvIzlhajotbDphY3nva7miJblkb3ku6TooYwKLSAqKueOr+Wig+iHqumAguW6lCoq77ya6Ieq5Yqo6K+G5YirIHFCIOi/mOaYryBUUuOAgeivu+eJiOacrOWPt++8jOaMieiDveWKm+mAieetlueVpQotICoq5pWw5o2u57ud5a+55LiN5YigKirvvJpgZGVsZXRlRmlsZXM9ZmFsc2VgIC8gYGRlbGV0ZS1sb2NhbC1kYXRhPWZhbHNlYO+8jOWKqOaJi+WJjeW/heWkh+S7vQotICoq5Y+v5pat54K557ut6LeRKirvvJrlj7DotKYgYHN0YXRlL2xlZGdlci5qc29uYO+8jOW3suaNoui/h+eahOiHquWKqOi3s+i/hwotICoq6Zu25L6d6LWWKirvvJrlj6ropoEgUHl0aG9uIDMuNysg5qCH5YeG5bqT77yIYmVuY29kZSDlhoXnva7vvInjgILljp/nlJ/nqpflj6Plj6bpnIAgdGtpbnRlcu+8iFdpbmRvd3MvbWFjT1Mg6Ieq5bim77yJCgotLS0KCiMjIOiOt+WPlgoKfCDmlrnlvI8gfCDpgILlkIggfAp8LS0tfC0tLXwKfCBEb2NrZXIg6ZWc5YOPIGBnaGNyLmlvL2xpdHRsZXNreWZpc2gvdHJhY2tlci1yZXBsYWNlOjEuMTJgIHwgTkFTIC8g5bi45byA5pyN5Yqh5Zmo77yI5LiL6Z2i546w5oiQ5ZG95Luk77yJIHwKfCBbUmVsZWFzZXMg5LiL6L29XSguLi8uLi9yZWxlYXNlcy9sYXRlc3QpIGB0cmFja2VyLXJlcGxhY2UtMS4xMi1saW51eDY0YCB8IExpbnV4IOacjeWKoeWZqO+8jGBjaG1vZCAreGAg55u05o6l6LeRIHwKfCBSZWxlYXNlcyDnmoQgYHRyYWNrZXItcmVwbGFjZS0xLjEyLXNyYy56aXBgIOaIliBgZ2l0IGNsb25lYCB8IFdpbmRvd3MgLyBtYWNPUyAvIOaciSBQeXRob24g55qE5py65Zmo77yb6KaBIGV4ZSDlnKggV2luZG93cyDkuIrlj4zlh7sgYGJ1aWxkX3dpbmRvd3MuYmF0YCDmiZPkuIDmrKEgfAoKLS0tCgojIyDnlKggRG9ja2VyIOi3ke+8iE5BUyAvIOacjeWKoeWZqOW4uOW8gOmmlumAie+8iQoKYGBgYmFzaApkb2NrZXIgcnVuIC1kIC0tbmFtZSB0cmFja2VyLXJlcGxhY2UgXAogIC12IHRyLWRhdGE6L2RhdGEgXAogIC1wIDg2NDI6ODY0MiBcCiAgLWUgVFJfVUlfVVNFUj1hZG1pbiBcCiAgLWUgVFJfVUlfUEFTUz0n6Ieq5bex5a6a5LiA5Liq5by65a+G56CBJyBcCiAgLS1yZXN0YXJ0IHVubGVzcy1zdG9wcGVkIFwKICBnaGNyLmlvL2xpdHRsZXNreWZpc2gvdHJhY2tlci1yZXBsYWNlOjEuMTIKYGBgCgrmtY/op4jlmajmiZPlvIAgYGh0dHA6Ly9OQVPnmoRJUDo4NjQyL2DvvIzovpPotKblj7flr4bnoIHnmbvlvZXjgILkuI3orr4gYFRSX1VJX1BBU1NgIOWImeavj+asoeWQr+WKqOmaj+acuueUn+aIkO+8iGBkb2NrZXIgbG9ncyB0cmFja2VyLXJlcGxhY2VgIOafpeeci++8ieOAguS7k+W6k+iHquW4piBgZG9ja2VyLWNvbXBvc2UueW1sYO+8jOaUueWvhueggS/nq6/lj6Mv6Lev5b6E6YO95pyJ5rOo6YeK44CC6ZWc5YOP5Y+M5p625p6E77yIYW1kNjQgLyBhcm02NO+8ie+8jOe+pOaZluOAgee7v+iBlOOAgeagkeiOk+a0vumDveiDveebtOaOpeaLieOAggoKfCDmjILovb0gfCDkvZznlKggfAp8LS0tfC0tLXwKfCBgLXYgdHItZGF0YTovZGF0YWAgfCDlrp7kvovphY3nva7jgIHnp43lrZDlpIfku73jgIHlj7DotKbpg73lnKjov5nvvIzljYfnuqfplZzlg4/kuI3kuKIgfAp8IGAtdiAv5a6/5Li75py65LiL6L2955uu5b2VOi90b3JyZW50c2AgfCDjgIzmlrDnp43lrZDnm67lvZXjgI3mmK/lrr/kuLvmnLrot6/lvoTml7bopoHmmKDlsITov5vlrrnlmajmiY3og73loavvvIjnvZHpobXph4zloasgYC90b3JyZW50c2DvvIkgfAp8IGAtdiAv5pen54mI5bel5YW35paH5Lu25aS5Oi9vbGR2ZXI6cm9gIHwg44CM5LiA6ZSu5a+85YWl5pen54mI44CN77ya5omT5byA572R6aG16Ieq5Yqo6K6k5Ye677yM6Lev5b6E55WZ56m654K55a+85YWl5Y2z5Y+vIHwKCuWuieWFqO+8muebkeWQrCAwLjAuMC4wIOaXtue9kemhtSoq5by65Yi255m75b2VKirvvJvlnKjoh6rlt7HnlLXohJHkuIrnm7TmjqXot5HvvIgxMjcuMC4wLjHvvInkuI3lvLnnmbvlvZXjgILlj6rmlL7ooYzmn5Dlj7DmnLrlmajvvJpgaXB0YWJsZXMgLUkgRE9DS0VSLVVTRVIgLXAgdGNwIC0tZHBvcnQgODY0MiAhIC1zIOWFgeiuuOeahElQIC1qIERST1Bg44CCCgotLS0KCiMjIOacrOWcsOi3ke+8iFdpbmRvd3MgLyBtYWNPUyAvIExpbnV477yJCgpgYGBiYXNoCnB5dGhvbjMgdHJhY2tlcl9yZXBsYWNlLnB5IGd1aSAgICMg5Y6f55Sf56qX5Y+j77yI5rKh5Zu+5b2i546v5aKD5Lya5o+Q56S65pS555SoIHVp77yJCnB5dGhvbjMgdHJhY2tlcl9yZXBsYWNlLnB5IHVpICAgICMg572R6aG156qX5Y+j77yM5Y+q55uR5ZCsIDEyNy4wLjAuMe+8jOaXoOmcgOeZu+W9lQpgYGAKCldpbmRvd3Mg5Y+M5Ye7IGB0cmFja2VyLXJlcGxhY2UtZ3VpLmJhdGAgLyBgdHJhY2tlci1yZXBsYWNlLXVpLmJhdGDvvJttYWNPUyDlj4zlh7vlr7nlupQgYC5jb21tYW5kYO+8iOWFiCBgY2htb2QgK3ggKi5jb21tYW5kYO+8jOesrOS4gOasoeWPs+mUruKGkuaJk+W8gO+8ieOAggoK5Yqg5a6e5L6L5LiA5qCP5LuO5LiK5Yiw5LiL77ya5Y2P6K6u77yIV2ViVUkg5byA5LqGIFRMUy/lj43ku6PlsLHpgIkgaHR0cHPvvIzoh6rnrb7or4HkuabmiY3li74i6Lez6L+H6K+B5Lmm5qCh6aqMIu+8ieOAgeexu+Wei++8iOeVmeepuj3oh6rliqjor4bliKvvvInjgIHlnLDlnYDjgIHnq6/lj6PjgIHnlKjmiLflkI3jgIHlr4bnoIHjgILmk43kvZzpobrluo/vvJoqKuWKoOWunuS+iyDihpIg4pGgIOS9k+ajgCDihpIg4pGhIOa8lOe7gyDihpIg5Yu+56Gu6K6kIOKGkiDikaIg55yf5omn6KGMIOKGkiDlj7DotKYqKuOAggoK5ZG95Luk6KGM562J5Lu377yaCgpgYGBiYXNoCnB5dGhvbjMgdHJhY2tlcl9yZXBsYWNlLnB5IGRvY3RvciAtYyBjb25maWcuanNvbiAtLW9sZCAi5pendHJhY2tlcuWtkOS4siIgICAgICAgICMg5L2T5qOACnB5dGhvbjMgdHJhY2tlcl9yZXBsYWNlLnB5IGFwcGx5ICAtYyBjb25maWcuanNvbiAtLW9sZCAiLi4uIiAtLXRvcnJlbnRzLWRpciAuL+aWsOenjeWtkOebruW9lSAgICMg5ryU57uDKOm7mOiupOS4jeaUuSkKcHl0aG9uMyB0cmFja2VyX3JlcGxhY2UucHkgYXBwbHkgIC1jIGNvbmZpZy5qc29uIC0tb2xkICIuLi4iIC0tdG9ycmVudHMtZGlyIC4v5paw56eN5a2Q55uu5b2VIC0teWVzICAjIOecn+i3kQpweXRob24zIHRyYWNrZXJfcmVwbGFjZS5weSBzdGF0dXMgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIyDlj7DotKbmpoLop4gKYGBgCgrkuI3mg7PlhpnphY3nva7vvJpgLS1ob3N0IDEyNy4wLjAuMSAtLXBvcnQgODA4MCAtLXVzZXIgbWVgICsg546v5aKD5Y+Y6YePIGBUUlJFUExBQ0VfUEFTU1dPUkRg44CCCgo+ICoq5LuO5pen54mI6L+B56e7KirvvJrngrnjgIzlr7zlhaXml6fniYjlpIfku70v6YWN572u44CN5oyH5pen54mI5bel5YW35paH5Lu25aS577yI5oiWIGBpbXBvcnQgLS1mcm9tIDzml6fnm67lvZU+YO+8jAo+IOWPr+WFiCBgLS1kcnktcnVuYO+8ie+8jOWkh+S7vS/lrp7kvosv5Y+w6LSm5LiA5qyh5bm26L+b5paw54mI77yb5LiN5a+85Lmf6KGM77yMYHJlcGFpcmAvYHJvbGxiYWNrYAo+IOWPr+eUqCBgLS1waWNrLXN0YXRlIDzml6fnm67lvZU+YCDmr4/mrKHmjIfov4fljrvjgIIKCi0tLQoKIyMg44CM6Lez6L+H5qCh6aqM44CN5pSv5oyB5oOF5Ya1Cgp8IOWuouaIt+erryB8IOWFjeWTiOW4jOagoemqjCB8IOS+neaNriB8CnwtLS18LS0tfC0tLXwKfCBxQml0dG9ycmVudCDiiaUgMy4zLjEz77yI5ZCrIDQueC81LnjvvIkgfCDinIUgfCBgL3RvcnJlbnRzL2FkZGAg55qEIGBza2lwX2NoZWNraW5nPXRydWVgIHwKfCBxQml0dG9ycmVudCA1LjMuMCB8IOKaoCDmnInlkI0gYnVnIOS8muW/veeVpeivpeWPguaVsCB8IOW3peWFt+ajgOa1i+WIsCLliqDlhaXlkI7ku43lnKjmoKHpqowv5Zue5rWBIuS8muaSpOmUgOaWsOenjeWtkCB8CnwgVHJhbnNtaXNzaW9uIOWFqOeJiOacrCB8IOKdjCB8IFJQQyDop4TojIPku47mnKrmmrTpnLIgc2VlZF9tb2RlIC8gc2tpcF9jaGVja2luZyB8CgoqKlRyYW5zbWlzc2lvbiDotbDluKblrojmiqTnmoTph43moKHpqowqKu+8muWkh+S7vSBgLnRvcnJlbnRgK+W/q+eFpyDihpIg5Yig5p2h55uu77yI5pWw5o2u5LiN5Yqo77yJ4oaSIOaaguWBnOaAgeWKoOaWsCDihpIK5ZCv5Yqo5qCh6aqM77yM5YWo56iL55uvIGBkb3dubG9hZGVkRXZlcmDigJTigJTkuIDlvIDlp4vnnJ/kuIvovb3nq4vliLvlgZzvvIjnu53kuI3ph43kuIvlh6DljYEgR0LvvInvvIwxMDAlIOS4lCB0cmFja2VyCuWvueaJjeeul+aIkOWKn++8m+maj+aXtuWPryBgcm9sbGJhY2tgIOaMieWkh+S7veWOn+agt+WKoOWbnuOAggoKKirlkIwgaGFzaCDnmoTkuKTmnaHot68qKu+8iOaWsOaXpyAudG9ycmVudCDmmK/lkIzkuIDku73mlbDmja7ml7bvvInvvJoKCi0gKirljp/lnLDnvJbovpEqKu+8iOm7mOiupO+8jHFCIDQuMSvvvInvvJpgZWRpdFRyYWNrZXJgIOmAkOadoeaNou+8jOS4jeWIoOS4jeaaguWBnO+8jOenkue6p+WujOaIkO+8jOaUueWujOWkjeaguO+8jOacieWHuuWFpeiHquWKqOWbnumAgAotICoq5Yig6Zmk4oaS6YeN5YqgKirvvIjogIEgcUIgLyDljp/lnLDmlLnlpLHotKXvvInvvJrliKDml6fnlZnmlbDmja4g4oaSIGBza2lwX2NoZWNraW5nYCDliqDmlrAg4oaSIDEwMCUg6Zu25Zue5rWB5omN5YGa56eN77ybcUIg5rKh5pS25bC+5pe25LiN5q27562J77yM5YWI5bmy5Yir55qE56iN5ZCO6Ieq5Yqo5Zue55yLCi0gaGFzaCDlr7nkuI3kuIogPSDnq5nngrnph43lgZrov4fnp43lrZDvvJoqKuaYjuehruaLkuWKqCoq77yM5LiN5Lya5ou/5ZCM5ZCN5paH5Lu256Gs5aWXCgotLS0KCiMjIOWRveS7pAoKfCDlkb3ku6QgfCDkvZznlKggfAp8LS0tfC0tLXwKfCBgZG9jdG9yYCB8IOWPquivu+S9k+ajgO+8muWei+WPty/niYjmnKwv6IO95ZCm6Lez6L+H5qCh6aqML2AtLW9sZGAg5ZG95Lit5aSa5bCRIHwKfCBgYXBwbHlgIHwg5o2iIHRyYWNrZXLvvIwqKum7mOiupOa8lOe7gyoq77yMYC0teWVzYCDmiY3liqjmiYvvvJvlvIDlt6Xoh6rliqjmib7lm54i5pyJ5aSH5Lu95Y205LiN5Zyo5YiX6KGoIueahOadoeebru+8iGAtLW5vLWF1dG8tZml4YCDlhbPvvIkgfAp8IGBzdGF0dXNgIHwg5Y+w6LSm5qaC6KeIICsg5b6F6YeN6K+V5piO57uG77yI5aSx6LSl55qE5pen5p2h55uu6YO96L+Y5Zyo77yJIHwKfCBgcm9sbGJhY2tgIHwg5oyJ5aSH5Lu95oqK5p+Q5p2h55uu5Yqg5Zue77yI5LiN5bim5Y+C5pWwPeWIl+WFqOmDqOWPr+Wbnua7mu+8m+eVjOmdouaciSLpgInlm57mu5rnp43lrZAi5LiN55So5omL5aGrIGhhc2jvvInjgILliqDlm57liY3lhYjmr5Tlr7nnjrDnirbvvJrkuIDoh7TlsLHkuI3liqjmiYvvvJvmnInlh7rlhaXliJflt67lvILorqnkvaDpgIkgYC0tZm9yY2VgL2AtLWtlZXBg44CC5aSH5Lu95Zyo5pen54mI5paH5Lu25aS577yaYC0tcGljay1zdGF0ZSA85pen55uu5b2VPmAg5oyH5LiA5qyh6ZW/5pyf6K6w5L2PIHwKfCBgcmVwYWlyYCB8IOaJuemHj+S4gOmUruS/ruWkjSLlpIfku73lnKjjgIHmnaHnm67msqHkuoYi55qE56eN5a2Q77ya5pqC5YGcK+i3s+i/h+agoemqjOiupOWHuuaVsOaNruaJjeaBouWkjeWBmuenje+8jOiupOS4jeWHuueVmeaaguWBnOWPquaKpeWRiiB8CnwgYHJlY292ZXJgIHwg5oyJ5ZCN5a2XK+Wkp+Wwj+aJvuWbnuS4ouWkseadoeebrueahOaVsOaNruW5tuWKoOWbnu+8mmByZWNvdmVyIC0tdG9ycmVudHMtZGlyIDzmlrDnp43lrZDnm67lvZU+IC0tcm9vdCA85pWw5o2u55uu5b2VPmDvvIzlj6rliqDkuI3liKDnu53kuI3ph43kuIvvvIzlhYggYC0tZHJ5LXJ1bmAgfAp8IGBpbXBvcnRgIHwgYGltcG9ydCAtLWZyb20gPOaXp+eJiOaWh+S7tuWkuT5gIOaKiuaXp+eJiOWkh+S7vS/lrp7kvosv5Y+w6LSm5bm26L+b5paw54mI77yI5Y+q5aSN5Yi25LiN5oyq5Yqo77yM5ZCM5ZCN5LiN6KaG55uW77yM5a6e5L6L5Y676YeN77yJIHwKfCBgcmVwb3J0YCB8IOaMh+WHuumAkOadoee7k+aenCBDU1Yg5L2N572uIHwKCuW4uOeUqOWPguaVsO+8mmAtLW9sZGDvvIgqKuW/hee7mSoq77yM5penIHRyYWNrZXIg5Yy56YWN5a2Q5Liy77yJ44CBYC0tdG9ycmVudHMtZGlyYO+8iOaMiSBpbmZvIGhhc2gg57K+56Gu6YWN5a+577yM5LiO5paH5Lu25ZCN5peg5YWz77yJ44CBYC0tc2NoZW1lIGh0dHBzYCAvIGAtLWluc2VjdXJlYOOAgWAtLWtpbmQgcWJ8dHJg44CBYC0tbmV3LXVybGDvvIjkuI3nu5nmlrDnp43lrZDmlofku7blj6rnu5kgYW5ub3VuY2XvvInjgIFgLS1vbmx5Ly0tbGltaXRg77yI5oyR5Yeg5Liq6K+V77yJ44CBYC0tcGF1c2Vg44CBYC0tY2hlY2stYnVkZ2V0YO+8iFRSIOagoemqjOmihOeul++8jOm7mOiupCAxODAwc++8ieOAgWAtLW1heC1mYWlsYO+8iOi/nui0peaUtuW3pe+8jOm7mOiupCA177yJ44CCCgotLS0KCiMjIOWuieWFqOacuuWItu+8iOmDveWcqOS7o+eggemHjO+8jOS4jemdoOiHquinie+8iQoKMS4g6buY6K6k5ryU57uD77yMYC0teWVzYCDmiY3miafooYwKMi4g5pWw5o2u5paH5Lu25rC45LiN5Yig6Zmk77yb5Yqo5omL5YmN5b+F6aG75oiQ5Yqf5YaZ5Ye65aSH5Lu977yM5aSH5LiN5LiK55u05o6l5ouS5YqoCjMuIHFC77ya5paw56eN5a2Q56Gu6K6k44CMMTAwJSvlgZrnp40r6Zu25Zue5rWB44CN5LmL5ZCO5omN5Yig5pen77ybVFLvvJrlpIfku70v55uu5b2VL+aWh+S7tuWIl+ihqOS7u+S4gOmhueWPluS4jeWIsOWwseaLkuWKqAo0LiDmo4DmtYvliLDlm57mtYHvvJpxQiDmkqTplIDmlrDnp43lrZDvvIjml6fnmoTmsqHliqjvvInvvJtUUiDnq4vliLvlgZzlubborrDlvoXph43or5UKNS4g6YCQ5p2h5YaZIGByZXN1bHRzLmNzdmAgKyDml6Xlv5cgKyDlj7DotKbvvIzkuK3mlq3ph43ot5Hoh6rliqjot7Pov4flt7LlrozmiJAKNi4g56eB5pyJ56eN5a2QIuS4jeS4i+i9vSLnmoTmlofku7bli77pgInkvJrlnKjmlrDnp43lrZDkuIrmgaLlpI3vvIzpgb/lhY3mjaLlrozooaXkuIvot7Pov4fliIbljbcKCi0tLQoKIyMg5LuT5bqT5YaF5a65CgpgYGAKdHJhY2tlcl9yZXBsYWNlLnB5IC8gdHJhY2tlcl91aS5weSAgICMg5byV5pOOICsg55WM6Z2i77yI5Y6f55Sf56qX5Y+jL+e9kemhteeql+WPo+WQjOS4gOW8leaTju+8iQpEb2NrZXJmaWxlIC8gZG9ja2VyLWNvbXBvc2UueW1sICAgICAgIyDlrrnlmajplZzlg4/vvIjnuq/moIflh4blupPvvIkrIE5BUyBjb21wb3NlIOaooeadvwpjb25maWcuZXhhbXBsZS5qc29uICAgICAgICAgICAgICAgICAgIyDphY3nva7mqKHmnb/vvIjml6Dlh63mja7vvIkKYnVpbGRfd2luZG93cy5iYXQgLyBidWlsZF9saW51eC5zaCAvIGJ1aWxkX21hYy5zaCAgICMg5ZCE5bmz5Y+w5Y2V5paH5Lu25omT5YyFCnRyYWNrZXItcmVwbGFjZS1ndWkuYmF0fC5jb21tYW5kIOetiSAgIyDkuI3miZPljIXnm7TmjqXlj4zlh7vot5EKdGVzdHMvc2VsZnRlc3QucHkgICAgICAgICAgICAgICAgICAgICMg5Lu/55yfIHFCL1RSIOmdtuWtkCArIDE3MCsg5pat6KiA77yI5LiN56Kw55yf5a6i5oi356uv77yJCmBgYAoKZXhlIOWPquiDveWcqCBXaW5kb3dzIOS4iuaJk++8iFB5SW5zdGFsbGVyIOS4jeiDveS6pOWPiee8luivke+8ie+8jOaJgOS7pSBXaW5kb3dzIOWMhee7meS4gOmUruaJk+WMheiEmuacrCArIOWFjeaJk+WMheebtOeUqOeahCAuYmF077ybbWFjT1Mg5ZCM55CG6LeRIGBidWlsZF9tYWMuc2hg77yM6KKrIEdhdGVrZWVwZXIg5oum5bCxIGB4YXR0ciAtZHIgY29tLmFwcGxlLnF1YXJhbnRpbmUgZGlzdC90cmFja2VyLXJlcGxhY2Vg44CCCgrov5DooYzlkI7lpJrlh7rnmoQgYHJlc3VsdHMuY3N2YOOAgWBzdGF0ZS9g44CBYGd1aWNvbmZpZy5qc29uYO+8iCoq5ZCr5a+G56CBKirvvInmmK/kvaDnmoTmlbDmja7vvIzliKvmj5DkuqTov5vku5PlupPjgIIKCi0tLQoKIyMg5o6S5p+lCgp8IOeOsOixoSB8IOWOn+WboCAvIOWkhOeQhiB8CnwtLS18LS0tfAp8IFRSIOi/lOWbniA0MDkgfCBDU1JGIOS/neaKpO+8jOW3peWFt+iHquWKqOWPliBgWC1UcmFuc21pc3Npb24tU2Vzc2lvbi1JZGAg6YeN5Y+R77yb5LiA55u0IDQwOSDmn6Xlj43ku6PmmK/lkKblkIPmjonor6Xlk43lupTlpLQgfAp8IFRSIOWKoOS6huenjeWtkOS4gOebtCAwJSB8IOaaguWBnOaAgeS4jeagoemqjO+8iOW3peWFt+W3suiHquWKqCBzdGFydO+8ieOAglRSIOmmluasoeagoemqjCBzdGF0dXMg5Lya5oql5oiQIuS4i+i9vSLvvIwqKuWIpOWbnua1geeciyBgZG93bmxvYWRlZEV2ZXJgKiogfAp8IHFCIOeZu+W9leWQjiA0MDMgfCBXZWJVSSDnmoQgQ1NSRiAvIElQIOeZveWQjeWNleiuvue9riB8CnwgcUIg5Yqg5YWl5ZCO5LuN5Zyo5qCh6aqMIHwgYHNraXBfY2hlY2tpbmdgIOayoeeUn+aViO+8iDUuMy4wIOW3suefpSBidWfvvInvvIzlt6XlhbfkvJrmkqTplIDlubbmiqXplJkgfAp8IFRSIOaKpSBgZXJyb3Igc2V0dGluZyBhbm5vdW5jZSBsaXN0YCB8IOengeacieenjeWtkOemgeatouaUuSB0cmFja2Vy77yM6LWw5Yig6ZmkK+mHjeWKoO+8iOacrOW3peWFt+m7mOiupOi3r+W+hO+8iSB8Cnwg5o2i5a6MIHBjdCDkuI3liLAgMTAwJSB8IOebmOS4iuaVsOaNruacrOaciee8uuWPo++8iOaXp+enjeWtkOmdoCByZXN1bWUg5YGH6KOFIDEwMCXvvInvvIzlt6Xlhbflt7LlgZzkvY/vvJrooaXmlofku7bmiJblj5bmtojli77pgIkgfAp8IOe9kemhteaMiemSrueCueS6huayoeWPjeW6lCB8IOeUqCAxLjEyK++8iDEuMTEg5YaF5bWM6ISa5pys5pyJ5pat6KGMIGJ1Z++8ie+8m+aIlua4hee8k+WtmOW8uuWItyB8Cnwg5LiL6L295Zmo5Yqg6ZSZ5Zyw5Z2A5ZCO5Y2h5b6I5LmFIHwgMS4xMiDotbcgOCDnp5LlhoXmiqUi6L+e5LiN5LiKIu+8m+aXp+eJiOS8mumHjeivleaMgiA1IOWIhumSnyB8CgotLS0KCiMjIOeJiOacrAoKYC1WYCDmiZPniYjmnKzlj7fvvJvnqpflj6PmoIfpopjjgIHnvZHpobXmoIfnrb7jgIHplZzlg48gdGFnIOWQjOatpeOAggoKLSAqKjEuMTIqKiDigJTigJQg5YWo5pawIERvY2tlci/nvZHpobXniYjvvIjotKblj7fnmbvlvZXjgIHij7vpgIDlh7rmjInpkq7jgIFjb21wb3Nl44CB5oyC6L295a+85YWl5pen54mI77yJ77yb5L+u572R6aG154mI5LiA5aSE5pat6KGM5L2/5omA5pyJ5oyJ6ZKu5aSx54G177yb5LiL6L295Zmo5Zyw5Z2A5Yqg6ZSZIDgg56eS5YaF5oqlIui/nuS4jeS4iiLvvIjljp/mjIIgNSDliIbpkp/vvInvvJvkv67nmbvlvZXlpLHotKXmuIXnqbrotKblj7fjgIIKLSAqKjEuMTEqKiDigJTigJQg5Y6f5Zyw57yW6L6RIHRyYWNrZXLvvJrkuI3liKDkuI3mmoLlgZzpm7bnrYnlvoXvvIzlv6vljYHlh6DlgI3vvJtxQiDmsqHlv5nlrozlhYjlpITnkIbliKvnmoTnqI3lkI7lm57nnIvvvJvkv67ljp/lnLDmlLnor6/orrDlpLHotKXvvJttYWNPUyDmiZPljIXjgIIKLSAqKjEuMTAqKiDigJTigJQg5L+uIHFCIOWIoOWkp+enjeWtkOaFouaXtue9ouW3pe+8iOWFiOaaguWBnOOAgeWkmuetieWNuOi9ve+8ieOAggotICoqMS45Kiog4oCU4oCUIOS/riBXaW5kb3dzIOaJuemHjyBXaW5FcnJvciAxMDA0OO+8iOi/nuaOpeWkjeeUqO+8ieOAggotICoqMS44Kiog4oCU4oCUIOS/ruWbnua7muivr+S8pO+8iOWFiOavlOWvueeOsOeKtu+8ie+8m1RSIOWKoOWbnumZkOmAn+agoemqjOWIsCAxMDAlIOaJjeWBmuenjeOAggotICoqMS404oCTMS43Kiog4oCU4oCUIOaNouWksei0peiHquWKqOWbnueBjOOAgWByZWNvdmVyYCDmib7lm57jgIHlvIDlt6Xoh6rliqjmib7lm57jgIFgaW1wb3J0IC0tZnJvbWAg5a+85YWl5pen54mI44CCCgrpqozor4HorrDlvZXvvJrnnJ/lrp7njq/looPmlbDnmb7np4HmnInnp43lrZAv5pWw5Y2BIFRCIOaJuemHj+mAmui/h++8iHFCIDQuNi54ICsgVFIgNC4wLjXvvIzpm7blm57mtYHvvInvvJvku7/nnJ/oh6rmo4AgMTcyIOaWreiogOWFqOi/h++8mzEuMTIg6LW3IERvY2tlciDniYjlj6bmnInnnJ/mtY/op4jlmajlhajmtYHnqIvlm57lvZLvvIjnmbvlvZUv5a6e5L6L5aKe5YigL+WvvOWFpeaXp+eJiC/pgIDlh7rvvInjgIIK
+# tracker替换 —— 批量替换 tracker（qBittorrent / Transmission）
+
+私有种子的 tracker URL 里带 passkey，站点换了 announce 之后客户端里那批老种子就废了。
+tracker URL 在 `.torrent` 的 info 段之外，换它 **info_hash 不变**，本质是"改个字符串"——
+这个工具把它变成一键批量：按 hash 配对新旧种子，**直接原地编辑 tracker**（qB 4.1+ 官方
+editTracker / TR setTrackers），不删种子、不暂停、零等待；并包办批量该有的活：自动认
+客户端和版本、零回流守护、台账断点续跑、出问题一键回滚。
+
+- **零硬编码**：不带任何 IP / 端口 / 账号，全走配置或命令行
+- **环境自适应**：自动识别 qB 还是 TR、读版本号，按能力选策略
+- **数据绝对不删**：`deleteFiles=false` / `delete-local-data=false`，动手前必备份
+- **可断点续跑**：台账 `state/ledger.json`，已换过的自动跳过
+- **零依赖**：只要 Python 3.7+ 标准库（bencode 内置）。原生窗口另需 tkinter（Windows/macOS 自带）
+
+---
+
+## 获取
+
+| 方式 | 适合 |
+|---|---|
+| Docker 镜像 `ghcr.io/littleskyfish/tracker-replace:1.12` | NAS / 常开服务器（下面现成命令） |
+| [Releases 下载](../../releases/latest) `tracker-replace-1.12-linux64` | Linux 服务器，`chmod +x` 直接跑 |
+| Releases 的 `tracker-replace-1.12-src.zip` 或 `git clone` | Windows / macOS / 有 Python 的机器；要 exe 在 Windows 上双击 `build_windows.bat` 打一次 |
+
+---
+
+## 用 Docker 跑（NAS / 服务器常开首选）
+
+```bash
+docker run -d --name tracker-replace \
+  -v tr-data:/data \
+  -p 8642:8642 \
+  -e TR_UI_USER=admin \
+  -e TR_UI_PASS='自己定一个强密码' \
+  --restart unless-stopped \
+  ghcr.io/littleskyfish/tracker-replace:1.12
+```
+
+浏览器打开 `http://NAS的IP:8642/`，输账号密码登录。不设 `TR_UI_PASS` 则每次启动随机生成（`docker logs tracker-replace` 查看）。仓库自带 `docker-compose.yml`，改密码/端口/路径都有注释。镜像双架构（amd64 / arm64），群晖、绿联、树莓派都能直接拉。
+
+| 挂载 | 作用 |
+|---|---|
+| `-v tr-data:/data` | 实例配置、种子备份、台账都在这，升级镜像不丢 |
+| `-v /宿主机下载目录:/torrents` | 「新种子目录」是宿主机路径时要映射进容器才能填（网页里填 `/torrents`） |
+| `-v /旧版工具文件夹:/oldver:ro` | 「一键导入旧版」：打开网页自动认出，路径留空点导入即可 |
+
+安全：监听 0.0.0.0 时网页**强制登录**；在自己电脑上直接跑（127.0.0.1）不弹登录。只放行某台机器：`iptables -I DOCKER-USER -p tcp --dport 8642 ! -s 允许的IP -j DROP`。
+
+---
+
+## 本地跑（Windows / macOS / Linux）
+
+```bash
+python3 tracker_replace.py gui   # 原生窗口（没图形环境会提示改用 ui）
+python3 tracker_replace.py ui    # 网页窗口，只监听 127.0.0.1，无需登录
+```
+
+Windows 双击 `tracker-replace-gui.bat` / `tracker-replace-ui.bat`；macOS 双击对应 `.command`（先 `chmod +x *.command`，第一次右键→打开）。
+
+加实例一栏从上到下：协议（WebUI 开了 TLS/反代就选 https，自签证书才勾"跳过证书校验"）、类型（留空=自动识别）、地址、端口、用户名、密码。操作顺序：**加实例 → ① 体检 → ② 演练 → 勾确认 → ③ 真执行 → 台账**。
+
+命令行等价：
+
+```bash
+python3 tracker_replace.py doctor -c config.json --old "旧tracker子串"        # 体检
+python3 tracker_replace.py apply  -c config.json --old "..." --torrents-dir ./新种子目录   # 演练(默认不改)
+python3 tracker_replace.py apply  -c config.json --old "..." --torrents-dir ./新种子目录 --yes  # 真跑
+python3 tracker_replace.py status                                              # 台账概览
+```
+
+不想写配置：`--host 127.0.0.1 --port 8080 --user me` + 环境变量 `TRREPLACE_PASSWORD`。
+
+> **从旧版迁移**：点「导入旧版备份/配置」指旧版工具文件夹（或 `import --from <旧目录>`，
+> 可先 `--dry-run`），备份/实例/台账一次并进新版；不导也行，`repair`/`rollback`
+> 可用 `--pick-state <旧目录>` 每次指过去。
+
+---
+
+## 「跳过校验」支持情况
+
+| 客户端 | 免哈希校验 | 依据 |
+|---|---|---|
+| qBittorrent ≥ 3.3.13（含 4.x/5.x） | ✅ | `/torrents/add` 的 `skip_checking=true` |
+| qBittorrent 5.3.0 | ⚠ 有名 bug 会忽略该参数 | 工具检测到"加入后仍在校验/回流"会撤销新种子 |
+| Transmission 全版本 | ❌ | RPC 规范从未暴露 seed_mode / skip_checking |
+
+**Transmission 走带守护的重校验**：备份 `.torrent`+快照 → 删条目（数据不动）→ 暂停态加新 →
+启动校验，全程盯 `downloadedEver`——一开始真下载立刻停（绝不重下几十 GB），100% 且 tracker
+对才算成功；随时可 `rollback` 按备份原样加回。
+
+**同 hash 的两条路**（新旧 .torrent 是同一份数据时）：
+
+- **原地编辑**（默认，qB 4.1+）：`editTracker` 逐条换，不删不暂停，秒级完成，改完复核，有出入自动回退
+- **删除→重加**（老 qB / 原地改失败）：删旧留数据 → `skip_checking` 加新 → 100% 零回流才做种；qB 没收尾时不死等，先干别的稍后自动回看
+- hash 对不上 = 站点重做过种子：**明确拒动**，不会拿同名文件硬套
+
+---
+
+## 命令
+
+| 命令 | 作用 |
+|---|---|
+| `doctor` | 只读体检：型号/版本/能否跳过校验/`--old` 命中多少 |
+| `apply` | 换 tracker，**默认演练**，`--yes` 才动手；开工自动找回"有备份却不在列表"的条目（`--no-auto-fix` 关） |
+| `status` | 台账概览 + 待重试明细（失败的旧条目都还在） |
+| `rollback` | 按备份把某条目加回（不带参数=列全部可回滚；界面有"选回滚种子"不用手填 hash）。加回前先比对现状：一致就不动手；有出入列差异让你选 `--force`/`--keep`。备份在旧版文件夹：`--pick-state <旧目录>` 指一次长期记住 |
+| `repair` | 批量一键修复"备份在、条目没了"的种子：暂停+跳过校验认出数据才恢复做种，认不出留暂停只报告 |
+| `recover` | 按名字+大小找回丢失条目的数据并加回：`recover --torrents-dir <新种子目录> --root <数据目录>`，只加不删绝不重下，先 `--dry-run` |
+| `import` | `import --from <旧版文件夹>` 把旧版备份/实例/台账并进新版（只复制不挪动，同名不覆盖，实例去重） |
+| `report` | 指出逐条结果 CSV 位置 |
+
+常用参数：`--old`（**必给**，旧 tracker 匹配子串）、`--torrents-dir`（按 info hash 精确配对，与文件名无关）、`--scheme https` / `--insecure`、`--kind qb|tr`、`--new-url`（不给新种子文件只给 announce）、`--only/--limit`（挑几个试）、`--pause`、`--check-budget`（TR 校验预算，默认 1800s）、`--max-fail`（连败收工，默认 5）。
+
+---
+
+## 安全机制（都在代码里，不靠自觉）
+
+1. 默认演练，`--yes` 才执行
+2. 数据文件永不删除；动手前必须成功写出备份，备不上直接拒动
+3. qB：新种子确认「100%+做种+零回流」之后才删旧；TR：备份/目录/文件列表任一项取不到就拒动
+4. 检测到回流：qB 撤销新种子（旧的没动）；TR 立刻停并记待重试
+5. 逐条写 `results.csv` + 日志 + 台账，中断重跑自动跳过已完成
+6. 私有种子"不下载"的文件勾选会在新种子上恢复，避免换完补下跳过分卷
+
+---
+
+## 仓库内容
+
+```
+tracker_replace.py / tracker_ui.py   # 引擎 + 界面（原生窗口/网页窗口同一引擎）
+Dockerfile / docker-compose.yml      # 容器镜像（纯标准库）+ NAS compose 模板
+config.example.json                  # 配置模板（无凭据）
+build_windows.bat / build_linux.sh / build_mac.sh   # 各平台单文件打包
+tracker-replace-gui.bat|.command 等  # 不打包直接双击跑
+tests/selftest.py                    # 仿真 qB/TR 靶子 + 170+ 断言（不碰真客户端）
+```
+
+exe 只能在 Windows 上打（PyInstaller 不能交叉编译），所以 Windows 包给一键打包脚本 + 免打包直用的 .bat；macOS 同理跑 `build_mac.sh`，被 Gatekeeper 拦就 `xattr -dr com.apple.quarantine dist/tracker-replace`。
+
+运行后多出的 `results.csv`、`state/`、`guiconfig.json`（**含密码**）是你的数据，别提交进仓库。
+
+---
+
+## 排查
+
+| 现象 | 原因 / 处理 |
+|---|---|
+| TR 返回 409 | CSRF 保护，工具自动取 `X-Transmission-Session-Id` 重发；一直 409 查反代是否吃掉该响应头 |
+| TR 加了种子一直 0% | 暂停态不校验（工具已自动 start）。TR 首次校验 status 会报成"下载"，**判回流看 `downloadedEver`** |
+| qB 登录后 403 | WebUI 的 CSRF / IP 白名单设置 |
+| qB 加入后仍在校验 | `skip_checking` 没生效（5.3.0 已知 bug），工具会撤销并报错 |
+| TR 报 `error setting announce list` | 私有种子禁止改 tracker，走删除+重加（本工具默认路径） |
+| 换完 pct 不到 100% | 盘上数据本有缺口（旧种子靠 resume 假装 100%），工具已停住：补文件或取消勾选 |
+| 网页按钮点了没反应 | 用 1.12+（1.11 内嵌脚本有断行 bug）；或清缓存强刷 |
+| 下载器加错地址后卡很久 | 1.12 起 8 秒内报"连不上"；旧版会重试挂 5 分钟 |
+
+---
+
+## 版本
+
+`-V` 打版本号；窗口标题、网页标签、镜像 tag 同步。
+
+- **1.12** —— 全新 Docker/网页版（账号登录、⏻退出按钮、compose、挂载导入旧版）；修网页版一处断行使所有按钮失灵；下载器地址加错 8 秒内报"连不上"（原挂 5 分钟）；修登录失败清空账号。
+- **1.11** —— 原地编辑 tracker：不删不暂停零等待，快十几倍；qB 没忙完先处理别的稍后回看；修原地改误记失败；macOS 打包。
+- **1.10** —— 修 qB 删大种子慢时罢工（先暂停、多等卸载）。
+- **1.9** —— 修 Windows 批量 WinError 10048（连接复用）。
+- **1.8** —— 修回滚误伤（先比对现状）；TR 加回限速校验到 100% 才做种。
+- **1.4–1.7** —— 换失败自动回灌、`recover` 找回、开工自动找回、`import --from` 导入旧版。
+
+验证记录：真实环境数百私有种子/数十 TB 批量通过（qB 4.6.x + TR 4.0.5，零回流）；仿真自检 172 断言全过；1.12 起 Docker 版另有真浏览器全流程回归（登录/实例增删/导入旧版/退出）。
