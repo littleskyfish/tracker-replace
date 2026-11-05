@@ -1,0 +1,32 @@
+{
+  "_说明": "把要操作的客户端列在这里。密码也可以不写在这里，改用环境变量 TRREPLACE_PASSWORD。",
+  "_协议": "scheme 只支持 http / https，不写当 http；https 且是自签证书时才把 insecure 设为 true。",
+  "_用法": "python3 tracker_replace.py doctor -c config.json --old 旧tracker的子串",
+  "instances": [
+    {
+      "label": "qb-主力",
+      "kind": "qb",
+      "host": "127.0.0.1",
+      "port": 8080,
+      "user": "你的qB用户名",
+      "password": "你的qB密码",
+      "scheme": "http"
+    },
+    {
+      "label": "tr-备用",
+      "kind": "tr",
+      "host": "127.0.0.1",
+      "port": 9091,
+      "user": "你的TR用户名",
+      "password": "你的TR密码",
+      "scheme": "https",
+      "insecure": false
+    },
+    {
+      "_注": "kind 可以省略，工具会自动先当 qB 试、再当 TR 试",
+      "label": "自动识别",
+      "host": "your-nas.example",
+      "port": 9092
+    }
+  ]
+}
