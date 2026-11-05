@@ -2,7 +2,10 @@
 
 私有种子的 tracker URL 里带 passkey / token。站点把 announce 换了以后，客户端里那批
 老种子就废了。tracker URL 在 `.torrent` 的 info 段之外，换它 **info_hash 不变**，
-理论上是"改个字符串"的事 —— 但两个客户端都不给好好改，于是有了这个工具。
+本质上就是"改个字符串"的事 —— 这个工具就是把这件小事变成**方便的一键批量**：
+读旧种子列表、和新种子文件按 hash 配对，然后**直接原地编辑 tracker**（qB 4.1+ 的
+官方 editTracker、TR 的 setTrackers），不删种子、不暂停、零等待；顺带把批量该有
+的活儿都包了：认客户端认版本、零回流守护、台账断点续跑、出问题一键回滚。
 
 - **零硬编码**：不带任何 IP / 端口 / 账号，全走 `config.json` 或命令行 / 环境变量
 - **环境自适应**：自动识别 qB 还是 TR、读版本号，按能力选策略
@@ -17,17 +20,21 @@
 
 命令行 `-V`（或 `--version`）会打出当前版本，窗口标题和网页标签上也显示。
 
-能力一览：qB / TR 批量换 tracker、免重校验直接认盘、零回流守护、台账与回滚、原生窗口 + 网页窗口 + 命令行、实例支持 http / https 协议。
+能力一览：qB / TR 批量换 tracker（qB 4.1+ 原地编辑，零等待）、免重校验直接认盘、零回流守护、台账与回滚、原生窗口 + 网页窗口 + 命令行、实例支持 http / https 协议。
 
 ### 版本修复记录
 
-- **1.10** —— 修 qBittorrent 删大种子（Remux 等几十 GB / 文件多的）时"旧条目删了还赖在列表里"就罢工：删除前先暂停该条目（qB 停掉活跃传输后卸载明显变快），默认等待时间从 30 秒加到 120 秒（`--wait-limit` 可再加长）。触发过保护时种子无损（旧条目原样回灌），重跑即可。
-- **1.9** —— 修 Windows 上跑到一半报 `WinError 10048`（端口耗尽）：原来每个请求都新开一条连接，Windows 会把关掉的连接压住约 2 分钟，批量处理几十个种子后端口撞车。改为持久连接复用（一台下载器全程基本只占 1 条连接），连接被掐或仍撞端口时自动重连并退避重试，不再中途报废。
-- **1.8** —— 回滚前先比对种子现状（tracker 地址 / 保存路径 / 分类标签 / 是否暂停）：一致就报"不用回滚"；有出入默认不动手并列出差价，可选 `--force` 覆盖或 `--keep` 不动（界面有对应勾选）。修 Transmission 回滚时 `torrent-duplicate` 误报失败（同一 hash 视为成功）。Transmission 加回改为限速读盘校验，数据认全（100%、零回流）才开始做种，一旦回流立即停并报告。`import` 一并吸收旧版的"新种子目录"等设置，导入即生效。
-- **1.7** —— 文档：置顶"从旧版迁移先把旧版工具文件夹并进新版"的说明，否则找回/修复/回滚没有老备份可用。
-- **1.6** —— `apply` 开工前自动自检：凡"有备份、却已不在下载器列表"的条目（此前 bug 误删的）先自动找回再干活，`--no-auto-fix` 可关。
-- **1.5** —— 新增 `import --from <旧版文件夹>`：一键把旧版的备份、实例配置、台账并进新版（`--dry-run` 预览，只复制不覆盖，可重复跑）；窗口和网页加"导入旧版备份/配置"按钮。
-- **1.4** —— 修换 tracker 时种子"两头空"：qBittorrent 删旧条目是异步的，新条目可能加不进去、旧的却已经删了，种子凭空消失。现在添加自动重试（`--add-tries`/`--add-gap`），失败自动把旧条目原样加回，加之前先查重。回滚不用记 hash：失败行直接印出 hash 和现成的 rollback 命令，`rollback` 不带参数列全部候选、支持输入前 6 位以上，界面可从备份点选。修单文件版备份放在临时目录、重启就丢的问题。新增 `recover` 命令：连 hash 都没有时按种子名+大小在数据盘定位找回，只加不删。
+- **1.11** —— 换 tracker 改原地编辑：不删不暂停零等待，快十几倍；qB 没忙完先处理别的种子、稍后自动回看；
+  修原地改被误记失败单；修窗口按钮排版越界；新增 macOS 打包。
+- **1.10** —— 修 qB 删大种子慢时罢工：删除前先暂停、多等卸载完成。
+- **1.9** —— 修 Windows 批量中途报 WinError 10048：连接复用，不再耗尽端口。
+- **1.8** —— 修回滚误伤：先比对现状，有出入默认不动手；修 TR `torrent-duplicate` 误报失败；
+  TR 加回改为限速校验认全 100% 才做种。
+- **1.7** —— 文档：补"迁移先把旧版文件夹并进新版"说明。
+- **1.6** —— 新增开工前自动找回"有备份却不在列表"的条目，`--no-auto-fix` 可关。
+- **1.5** —— 新增 `import --from` 一键导入旧版备份/配置/台账。
+- **1.4** —— 修换 tracker 种子"两头空"：添加自动重试、失败自动回灌旧条目；回滚免记 hash；
+  新增 `recover` 按种子名+大小找回。
 
 ---
 
@@ -112,17 +119,14 @@ python3 tracker_replace.py doctor --host 127.0.0.1 --port 8080 --user me --old "
 并保留 `config/resume/<hash>*.resume`（TR 会信 resume 里的进度）。那需要 TR 主机的 shell，
 属于另一套做法，本工具（纯 RPC）不做，也**不建议**手滑玩。
 
-### 为什么不能"原地改 tracker"
+### 同 hash 的两条路（新旧 .torrent 实为同一份数据）
 
-站点换 tracker 时给的是**另一份 .torrent 文件**：announce-list、created by、comment
-都可能不同，甚至 info 段也可能重做过。所以：
-
-- 拿旧种子改个 announce 凑出来的那份，站点不认，也不能当原种子延续 —— 工具**不做**这种事
-- `/torrents/editTracker` 这类"原地替换"也不作为路径（私有种子还受 libtorrent 限制，各版本行为不一）
-- 唯一路径：**加新种子 → 确认 100% 做种且零回流 → 再删旧种子**（qB 与 TR 都是这条，区别只在
-  qB 能 `skip_checking` 免读盘、TR 必须读盘校验）
-- 因此新种子文件必须给全：`--torrents-dir` 指向站点下载的新种子目录，工具按 **info hash** 配对。
-  hash 对不上（站点重做过种子）会明确拒动，不会拿同名文件硬套 —— 那种情况换了等于重新下一遍数据
+- **原地编辑（默认，qB 4.1+ / WebAPI 2.1+）**：站点给的新种子和旧的 hash 相同 = 数据同一份、
+  只有 tracker 变了，用官方 `editTracker` 接口逐条换——不删条目、不暂停、零等待，秒级完成；
+  改完核对 tracker，有出入自动回退原样。
+- **删除→重加（兜底：老版 qB、或原地改失败）**：删旧条目（留数据）→ `skip_checking` 加新 →
+  确认 100% 零回流才做种。qB 删旧种没收尾时不死等：先处理别的种子，稍后自动回看两次。
+- hash 对不上（站点重做过种子）：明确拒动并报告，不会拿同名文件硬套 —— 那种情况换了等于重下。
 
 ---
 
@@ -181,11 +185,14 @@ tracker-replace/
 ├── requirements.txt      # 依赖说明（工具本身：无）
 ├── build_linux.sh        # Linux 打单文件 -> dist/tracker-replace
 ├── build_windows.bat     # Windows 打单文件 -> dist\tracker-replace.exe
+├── build_mac.sh          # macOS 打单文件 -> dist/tracker-replace（在 Mac 上跑）
 ├── tracker替换.sh            # Linux/macOS 直接跑源码
 ├── tracker-replace-gui.bat       # Windows 直接跑源码（窗口）
 ├── tracker-replace-ui.bat        # Windows 直接跑源码（浏览器窗口）
+├── tracker-replace-gui.command   # macOS 双击直接跑源码（窗口，bat 的 mac 版）
+├── tracker-replace-ui.command    # macOS 双击直接跑源码（浏览器窗口）
 ├── dist/tracker-replace          # Linux x86_64 单文件（已打好，无需 python 直接跑）
-└── tests/selftest.py     # 仿真 qB/TR 靶子 + 72 条断言（不碰真客户端）
+└── tests/selftest.py     # 仿真 qB/TR 靶子 + 160+ 条断言（不碰真客户端）
 ```
 
 三个压缩包：
@@ -194,10 +201,15 @@ tracker-replace/
 | `tracker替换-src-*.zip` | 源码 + 脚本 + 自检 | 有 Python 的机器，或以后改代码 |
 | `tracker替换-linux-*.zip` | `dist/tracker-replace` 单文件 + 说明 | Linux 服务器，直接 `./tracker-replace` |
 | `tracker替换-windows-kit-*.zip` | 源码 + `build_windows.bat` + 两个 .bat | Windows：先双击 .bat 直接用；要 exe 就双击 `build_windows.bat` 打一次 |
+| `tracker替换-mac-kit-*.zip` | 源码 + `tracker-replace-gui.command` + `build_mac.sh` | macOS：双击 .command 直接用；要单文件再 `sh build_mac.sh` |
 
 > exe 只能在 Windows 上打（PyInstaller 不支持从 Linux 交叉编译），所以 Windows 包里给的是
 > 一键打包脚本 + 免打包直用的 .bat；在任意一台 Windows 上跑一次 `build_windows.bat`，
 > 得到的 `dist\tracker-replace.exe` 可以单独拷去任何 Windows 机器（`--noconsole`，只出窗口不弹黑框）。
+> macOS 同理：`build_mac.sh` 在 Mac 上跑一次（Intel/Apple 芯片都行）；打出的单文件若被
+> Gatekeeper 拦，`xattr -dr com.apple.quarantine dist/tracker-replace` 放行即可。
+> `.command` 就是 mac 版的 .bat：解压后先 `chmod +x *.command`，第一次右键 → 打开 一下，
+> 之后直接双击出界面。
 
 跑过之后会多出：`results.csv`、`tracker-replace.log`、`state/ledger.json`、`state/backup/…`、
 `guiconfig.json`（窗口里存的东西，**里面有密码**）
