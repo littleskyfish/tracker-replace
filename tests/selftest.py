@@ -402,10 +402,15 @@ class MockTR(object):
             return {}
         if m == "torrent-add":
             raw = base64.b64decode(a.get("metainfo") or "")
+            ih = ih_of(raw)
+            for _t in self.entries.values():      # 真 TR 行为：同 hash 已在 → duplicate
+                if _t.get("hashString") == ih:
+                    return {"torrent-duplicate": {"id": _t["id"], "name": _t["name"],
+                                                  "hashString": ih}}
             tid = self.next_id
             self.next_id += 1
             trk = a.get("trackerAdd") or (tracker_replace.torrent_info(raw)["announces"] or [OLD])
-            self.entries[tid] = {"id": tid, "name": "Movie A", "hashString": ih_of(raw),
+            self.entries[tid] = {"id": tid, "name": "Movie A", "hashString": ih,
                                  "status": 1, "percentDone": 0.0, "recheckProgress": 0.0,
                                  "error": 0, "errorString": "", "downloadedEver": 0,
                                  "leftUntilDone": 4096, "totalSize": 4096,
@@ -824,6 +829,10 @@ def main():
         new = os.path.join(P, "newtool")
         os.makedirs(os.path.join(old, "state", "backup", "127.0.0.1_9999"))
         os.makedirs(new)
+        td = os.path.join(P, "torrents")
+        os.makedirs(td)
+        sd2 = os.path.join(P, "olddata")
+        os.makedirs(sd2)
         h = "ab" * 20
         open(os.path.join(old, "state", "backup", "127.0.0.1_9999", h + ".new.torrent"),
              "wb").write(b"TOR")
@@ -831,7 +840,8 @@ def main():
                   open(os.path.join(old, "state", "backup", "127.0.0.1_9999",
                                     h + ".state.json"), "w"))
         json.dump({"instances": [{"kind": "qb", "scheme": "http", "host": "10.9.9.9",
-                                  "port": 8080, "user": "u", "password": "p"}]},
+                                  "port": 8080, "user": "u", "password": "p"}],
+                   "form": {"tdir": td}, "state_dirs": [sd2]},
                   open(os.path.join(old, "guiconfig.json"), "w"))
         json.dump({"127.0.0.1_9999": {"done": {h: {"name": "老片子", "ts": "t"}}}},
                   open(os.path.join(old, "state", "ledger.json"), "w"))
@@ -841,6 +851,7 @@ def main():
                          capture_output=True, text=True, timeout=60)
         check("QB-17 演练报数且不落盘",
               r.returncode == 0 and "备份 +2" in r.stdout
+              and "新种子目录" in r.stdout
               and not os.path.exists(os.path.join(new, "state", "backup")),
               (r.stdout + r.stderr)[-200:])
         r2 = subprocess.run([sys.executable, "tracker_replace.py", "import", "--from", old],
@@ -852,6 +863,10 @@ def main():
               (r2.stdout + r2.stderr)[-200:])
         check("QB-17 旧版实例并进 guiconfig",
               any(i.get("host") == "10.9.9.9" for i in gu.get("instances", [])), str(gu)[:200])
+        check("QB-17 旧版新种子目录(tdir)被吸收进自家 form",
+              (gu.get("form") or {}).get("tdir") == td, str(gu.get("form"))[:150])
+        check("QB-17 旧版 state_dirs(远处备份目录)合并进自家",
+              sd2 in (gu.get("state_dirs") or []), str(gu.get("state_dirs"))[:150])
         check("QB-17 旧版台账并进 ledger", h in (ld.get("127.0.0.1_9999", {}).get("done", {})),
               str(ld)[:200])
         check("QB-17 旧版文件原样没动",
@@ -859,7 +874,8 @@ def main():
                                           h + ".new.torrent")), "旧版被动过")
         r3 = subprocess.run([sys.executable, "tracker_replace.py", "import", "--from", old],
                             cwd=new, capture_output=True, text=True, timeout=60)
-        check("QB-17 再导一次幂等（全是跳过）", "备份 +0" in r3.stdout and "跳过 2" in r3.stdout,
+        check("QB-17 再导一次幂等（全是跳过）", "备份 +0" in r3.stdout and "跳过 2" in r3.stdout
+              and "备份目录 +0" in r3.stdout,
               (r3.stdout + r3.stderr)[-160:])
         r4 = subprocess.run([sys.executable, "tracker_replace.py", "rollback",
                              "-c", "cfg_none.json"], cwd=new,
@@ -1106,6 +1122,47 @@ def main():
                 s.stop()
 
     # ---------------- VER：版本号 / 界面按钮 ----------------
+    # ---------------- TR-18 同 hash 条目已存在：比对→用户选覆盖/不动 ----------------
+    if want("TR-18"):
+        print("\nTR-18 rollback 遇同 hash 条目：先比字段，一致=不用回滚；有出入=默认拦，--keep 不动 / --force 覆盖")
+        script = [{"recheckProgress": 0.4, "status": 4, "percentDone": 0.0, "leftUntilDone": 4096},
+                  {"recheckProgress": 1.0, "status": 6, "percentDone": 1.0, "leftUntilDone": 0}]
+        m, p, led, work, (oh, nh) = tr_case("TR-18", script, extra=["--check-budget", "30"])
+        s2 = Server(m)
+        s2.start()
+        try:
+            time.sleep(0.2)
+            cfg = json.load(open(os.path.join(work, "cfg.json")))
+            cfg["instances"][0]["port"] = m.port
+            json.dump(cfg, open(os.path.join(work, "cfg.json"), "w"))
+
+            def rb(*ex):
+                return subprocess.run([sys.executable, "tracker_replace.py", "rollback",
+                                       "-c", "cfg.json"] + list(ex),
+                                      cwd=work, capture_output=True, text=True, timeout=60)
+            trk0 = lambda: (list(m.entries.values())[0]["trackers"][0]["announce"]
+                            if len(m.entries) == 1 else "多条目")
+            check("TR-18 目标状态与现条目一致 → 报不用回滚",
+                  (lambda r0: r0.returncode == 0 and "不用回滚" in r0.stdout + r0.stderr)
+                  (rb("--hash", oh, "--poll", "0.1", "--wait-limit", "2")), trk0())
+            r1 = rb("--hash", oh, "--to-old", "--poll", "0.1", "--wait-limit", "2")
+            o1 = r1.stdout + r1.stderr
+            check("TR-18 有出入(换回旧tracker)默认拦住并列diff",
+                  r1.returncode != 0 and "不一致" in o1 and "--force" in o1, o1[-200:])
+            check("TR-18 拦住时条目原样未动", trk0() == NEW, trk0())
+            r2 = rb("--hash", oh, "--to-old", "--keep", "--poll", "0.1", "--wait-limit", "2")
+            o2 = r2.stdout + r2.stderr
+            check("TR-18 --keep 明确不动、成功退出",
+                  r2.returncode == 0 and "按你的选择" in o2 and trk0() == NEW,
+                  "rc=%s 有文案=%s trk=%s" % (r2.returncode, "按你的选择" in o2, trk0()))
+            r3 = rb("--hash", oh, "--to-old", "--force", "--poll", "0.1", "--wait-limit", "2")
+            o3 = r3.stdout + r3.stderr
+            check("TR-18 --force 覆盖：删旧条目按备份加回(tracker=旧)",
+                  r3.returncode == 0 and "已按" in o3 and len(m.entries) == 1
+                  and trk0() == OLD, o3[-200:])
+        finally:
+            s2.stop()
+
     if want("VER"):
         print("\nVER 版本号与界面按钮")
         check("有版本号、形如 x.y", bool(re.match(r"^\d+\.\d+", tracker_replace.VERSION)),

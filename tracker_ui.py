@@ -121,6 +121,7 @@ class Engine(object):
             poll=float(form.get("poll") or 5), sleep=float(form.get("sleep") or 1),
             max_fail=int(form.get("maxfail") or 5),
             hash=(form.get("hash") or "").strip(), to_old=bool(form.get("to_old")),
+            rb_force=bool(form.get("rb_force")), rb_keep=bool(form.get("rb_keep")),
             no_cap=bool(form.get("nocap")), wait_limit=int(form.get("wait_limit") or 30))
 
     def start(self, cmd, form, instances):
@@ -216,13 +217,16 @@ def run_tk(conf, selftest=None):
     v_maxfail = tk.StringVar(value=str(conf.get("maxfail", 5)))
     v_seed = tk.BooleanVar(value=bool(conf.get("seed_after", True)))
     v_nocap = tk.BooleanVar(value=bool(conf.get("nocap", False)))
+    v_rbforce = tk.BooleanVar(value=False)
+    v_rbkeep = tk.BooleanVar(value=False)
     v_confirm = tk.BooleanVar(value=False)
 
     def collect_form():
         f = {"old": vars_["old"].get().strip(), "new_url": vars_["new_url"].get().strip(),
              "tdir": vars_["tdir"].get().strip(), "only": vars_["only"].get().strip(),
              "layout": vars_["layout"].get().strip(), "hash": vars_["hash"].get().strip(),
-             "seed_after": v_seed.get(), "nocap": v_nocap.get(), "confirmed": v_confirm.get()}
+             "seed_after": v_seed.get(), "nocap": v_nocap.get(), "confirmed": v_confirm.get(),
+             "rb_force": v_rbforce.get(), "rb_keep": v_rbkeep.get()}
         for k, v in (("limit", v_limit), ("budget", v_budget), ("poll", v_poll),
                      ("sleep", v_sleep), ("maxfail", v_maxfail)):
             try:
@@ -417,6 +421,8 @@ def run_tk(conf, selftest=None):
     ttk.Checkbutton(opt, text="TR 校验期不加 1KB/s 限速", variable=v_nocap).pack(side="left", padx=6)
     ttk.Checkbutton(opt, text="我已确认，可以动真格", variable=v_confirm).pack(side="left", padx=6)
     ttk.Button(opt, text="选回滚种子", command=pick_rollback).pack(side="left", padx=6)
+    ttk.Checkbutton(opt, text="回滚遇不一致→强制覆盖", variable=v_rbforce).pack(side="left", padx=2)
+    ttk.Checkbutton(opt, text="→保持不动", variable=v_rbkeep).pack(side="left", padx=2)
 
     def import_old():
         d = filedialog.askdirectory(title="选旧版工具所在的文件夹（里面要有 state/backup）",
@@ -428,10 +434,21 @@ def run_tk(conf, selftest=None):
         except ValueError as err:
             messagebox.showwarning("导不了", str(err))
             return
+        try:                       # 实例可能被导入扩充：回读配置、刷新左边列表
+            fresh = json.load(open(tracker_replace.GUI, encoding="utf-8"))
+            insts[:] = [i for i in fresh.get("instances", []) if isinstance(i, dict)]
+            conf["instances"] = list(insts)
+            if rep.get("tdir") and not vars_["tdir"].get().strip():
+                vars_["tdir"].set(rep["tdir"])   # 旧版填过的新种子目录：自家是空的才补
+            refresh()
+        except Exception:
+            pass
         messagebox.showinfo("导入完成",
-                            "备份 +%d（跳过已有 %d）\n客户端实例 +%d\n台账条目 +%d\n\n"
+                            "备份 +%d（跳过已有 %d）\n客户端实例 +%d（已列进左边）\n台账条目 +%d、备份目录 +%d%s\n\n"
                             "旧版文件夹原样没动，以后可以不管它了。"
-                            % (rep["files"], rep["same"], rep["inst"], rep["ledger"]))
+                            % (rep["files"], rep["same"], rep["inst"], rep["ledger"],
+                               rep.get("sdirs", 0),
+                               ("\n新种子目录已填：%s" % rep["tdir"]) if rep.get("tdir") else ""))
         status.configure(text="已从旧版导入：备份 %d、实例 %d、台账 %d"
                          % (rep["files"], rep["inst"], rep["ledger"]))
 
@@ -533,6 +550,18 @@ def run_tk(conf, selftest=None):
                     own = rep["files"] >= 1 and hit
                     if own:
                         rep2 = tracker_replace.import_old(conf.get("far", ""))
+                        try:       # 导完必须立刻刷进左边列表（和历史 bug 对着干）
+                            fresh = json.load(open(tracker_replace.GUI, encoding="utf-8"))
+                            insts[:] = [i for i in fresh.get("instances", []) if isinstance(i, dict)]
+                            conf["instances"] = list(insts)
+                            refresh()
+                            if len(tree.get_children()) < len(insts) or \
+                                    (rep2["inst"] + rep["inst"] and len(insts) == 0):
+                                box["hard"] = 1
+                                txt.insert("end", "自检 importold ✗ 导完列表没刷新\n")
+                        except Exception as e:
+                            box["hard"] = 1
+                            txt.insert("end", "自检 importold ✗ 刷新列表炸了：%s\n" % e)
                         txt.insert("end", "自检 importold ✓ 备份 %d、实例 %d、台账 %d；"
                                    "再导一次不重复（+%d）\n"
                                    % (rep["files"], rep["inst"], rep["ledger"], rep2["files"]))
@@ -633,7 +662,9 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
    <span>回滚 hash</span><input id="hash" size="18">
    <button type="button" onclick="loadRb()">选回滚种子</button>
    <select id="rb" onchange="if(this.value)document.getElementById('hash').value=this.value"
-    style="max-width:380px"><option value="">（从有备份的中挑一个）</option></select></div>
+    style="max-width:380px"><option value="">（从有备份的中挑一个）</option></select>
+   <label><input type="checkbox" id="rbforce">遇不一致→强制覆盖</label>
+   <label><input type="checkbox" id="rbkeep">→保持不动</label></div>
   <div class="row">
    <input id="sdir" size="30" placeholder="旧版工具文件夹（或旧 exe）的路径">
    <button type="button" onclick="addSD()">指过来扫描</button>
@@ -677,7 +708,8 @@ function addInst(){const h=host.value.trim(),p=parseInt(port.value||0);
 function del(i){S.instances.splice(i,1);api('/api/save',{instances:S.instances});render();}
 function form(){return{old:old.value,new_url:new_url.value,tdir:tdir.value,only:only.value,
  limit:limit.value,budget:budget.value,poll:poll.value,sleep:sleep.value,maxfail:maxfail.value,
- hash:hash.value,seed:seed.checked,nocap:nocap.checked,confirm:confirm.checked};}
+ hash:hash.value,seed:seed.checked,nocap:nocap.checked,confirm:confirm.checked,
+ rb_force:rbforce.checked,rb_keep:rbkeep.checked};}
 async function go(c){const r=await api('/api/run',{cmd:c,form:form(),instances:S.instances});
  if(r.err)log0('★ '+r.err);}
 let idx=0;
@@ -713,8 +745,11 @@ async function impOld(){const d=document.getElementById('sdir').value.trim();
  if(!confirm('把旧版的备份、客户端实例、台账复制进新版？\n旧版文件夹原样不动，导完就可以不管它了。'))return;
  const r=await api('/api/importold',{dir:d});
  if(r.err)alert(r.err);
- else{document.getElementById('sdir').value='';loadRb();
-  alert('导入完成：备份 +'+r.files+'（跳过已有 '+r.same+'）、实例 +'+r.inst+'、台账 +'+r.ledger);}}
+ else{document.getElementById('sdir').value='';
+  if(r.instances){S.instances=r.instances;render();}
+  if(r.tdir&&!document.getElementById('tdir').value.trim())document.getElementById('tdir').value=r.tdir;
+  loadRb();
+  alert('导入完成：备份 +'+r.files+'（跳过已有 '+r.same+'）、实例 +'+r.inst+'（已列进上面列表）、台账 +'+r.ledger+(r.sdirs?'、备份目录 +'+r.sdirs:'')+(r.tdir?'\n新种子目录已填：'+r.tdir:''));}}
 (async()=>{const s=await api('/api/state?after=0');S.instances=s.instances||[];render();
   ['old','new_url','tdir','only','limit','budget','poll','sleep','maxfail','hash'].forEach(k=>{
    if(s.form&&s.form[k]!==undefined)document.getElementById(k).value=s.form[k];});
@@ -796,12 +831,17 @@ def run_web(conf, port, open_browser=True):
                 except ValueError as e:
                     return self._json({"err": str(e)})
                 try:            # 实例可能被导入扩充，同步内存快照
-                    state["conf"]["instances"] = json.load(
-                        open(tracker_replace.GUI, encoding="utf-8")).get("instances", [])
+                    fresh = json.load(open(tracker_replace.GUI, encoding="utf-8"))
+                    state["conf"]["instances"] = fresh.get("instances", [])
+                    state["conf"]["state_dirs"] = fresh.get("state_dirs", [])
+                    if rep.get("tdir"):
+                        state["conf"].setdefault("form", {})["tdir"] = rep["tdir"]
                 except Exception:
                     pass
                 return self._json({"files": rep["files"], "same": rep["same"],
-                                   "inst": rep["inst"], "ledger": rep["ledger"]})
+                                   "inst": rep["inst"], "ledger": rep["ledger"],
+                                   "tdir": rep.get("tdir", ""),
+                                   "instances": state["conf"].get("instances", [])})
             if self.path == "/api/save":
                 c = state["conf"]
                 c["instances"] = b.get("instances", [])

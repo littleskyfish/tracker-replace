@@ -55,7 +55,7 @@ import binascii
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
-VERSION = "1.7"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+VERSION = "1.8"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
 
 def _base_dir():
     """程序所在目录。PyInstaller 单文件模式下 __file__ 指向退出就销毁的临时解压
@@ -584,10 +584,22 @@ class TrClient:
             args["trackerAdd"] = [new_url]
         a = self.call("torrent-add", args, timeout=300)
         obj = a.get("torrent-added") or a.get("torrent")
-        if not obj:
-            raise RuntimeError("TR 未返回 torrent-added（同名/同 hash 已存在？）: %s"
-                               % json.dumps(a, ensure_ascii=False)[:120])
-        return obj["id"]
+        if obj:
+            return obj["id"]
+        dup = a.get("torrent-duplicate")
+        if isinstance(dup, dict) and dup.get("id") is not None:
+            want = ""
+            try:
+                want = torrent_info(raw)["hash"]
+            except Exception:
+                pass
+            if want and (dup.get("hashString") or "").lower() == want:
+                return dup["id"]      # 同 hash 的条目本来就在：当作已加入（回滚幂等）
+            raise RuntimeError("TR 拒加：客户端已有一个同名但不同 hash 的种子 —— %s（%s），"
+                               "先把它删掉或把数据挪个目录再操作"
+                               % (dup.get("name", "?"), (dup.get("hashString") or "?")[:12]))
+        raise RuntimeError("TR 未返回 torrent-added: %s"
+                           % json.dumps(a, ensure_ascii=False)[:120])
 
     def remove(self, tid):
         self.call("torrent-remove", {"ids": [tid], "delete-local-data": False})
@@ -1595,7 +1607,8 @@ def import_old(src, dry=False):
     sd = normalize_pick(src)
     if not sd:
         raise ValueError("%s 不像旧版工具文件夹（里面找不到 state/backup）" % src)
-    rep = {"from": sd, "files": 0, "same": 0, "inst": 0, "ledger": 0}
+    rep = {"from": sd, "files": 0, "same": 0, "inst": 0, "ledger": 0,
+           "tdir": "", "sdirs": 0}
     ob = os.path.join(sd, "backup")
     if os.path.isdir(ob):
         for label in sorted(os.listdir(ob)):
@@ -1621,6 +1634,50 @@ def import_old(src, dry=False):
         pass
     old_insts = [i for i in (cfg_old.get("instances") or [])
                  if isinstance(i, dict) and i.get("host") and i.get("port")]
+
+    # 旧版界面上填过的配置一并搬：新种子目录（自家空的才补）、远处备份目录清单（去重合并）
+    ov = ""
+    of = cfg_old.get("form")
+    if isinstance(of, dict) and isinstance(of.get("tdir"), str):
+        ov = of.get("tdir").strip()
+    elif isinstance(cfg_old.get("tdir"), str):
+        ov = cfg_old.get("tdir").strip()
+    try:
+        cfgc = json.load(open(GUI, encoding="utf-8"))
+        if not isinstance(cfgc, dict):
+            cfgc = {}
+    except Exception:
+        cfgc = {}
+    changed = False
+    if ov and not str((cfgc.get("form") or {}).get("tdir") or "").strip():
+        cfgc.setdefault("form", {})["tdir"] = ov
+        rep["tdir"] = ov
+        changed = True
+    lst = [str(x) for x in (cfgc.get("state_dirs") or [])]
+    mine = set()
+    for x in lst:
+        try:
+            mine.add(os.path.realpath(x))
+        except Exception:
+            mine.add(x)
+    for d in (cfg_old.get("state_dirs") or []):
+        if not isinstance(d, str) or not d.strip():
+            continue
+        try:
+            rp = os.path.realpath(d)
+        except Exception:
+            rp = d
+        if rp in mine:
+            continue
+        lst.append(d)
+        mine.add(rp)
+        rep["sdirs"] += 1
+        changed = True
+    cfgc["state_dirs"] = lst
+    if changed and not dry:
+        with open(GUI, "w", encoding="utf-8") as fh:
+            json.dump(cfgc, fh, ensure_ascii=False, indent=1)
+        os.chmod(GUI, 0o600)
 
     def ikey(i):
         return (str(i.get("kind", "")), str(i.get("scheme", "http")),
@@ -1679,9 +1736,10 @@ def cmd_import(a):
             die(str(e))
         for k in tot:
             tot[k] += rep[k]
-        print("%s%s：备份 +%d（已有一致的跳过 %d）、客户端实例 +%d、台账条目 +%d"
+        print("%s%s：备份 +%d（已有一致的跳过 %d）、客户端实例 +%d、台账条目 +%d、备份目录 +%d%s"
               % ("（演练）" if a.dry_run else "✓ ", rep["from"],
-                 rep["files"], rep["same"], rep["inst"], rep["ledger"]))
+                 rep["files"], rep["same"], rep["inst"], rep["ledger"], rep["sdirs"],
+                 ("、新种子目录→%s" % rep["tdir"]) if rep.get("tdir") else ""))
     if a.dry_run:
         print("演练：上面是将要导入的内容，没真写任何东西；去掉 --dry-run 再跑一遍就真导入")
         return
@@ -1907,6 +1965,97 @@ def print_backups(rows, head=""):
             r["ts"], "new" if r["has_new"] else "", "/old" if r["has_old"] else ""))
 
 
+def cur_view(c, ih):
+    """客户端里同 hash 条目的现状快照（回滚前比对用）；没有该条目返回 None。"""
+    if c.kind == "qb":
+        row = None
+        for t in c.torrents():
+            if (t.get("infohash_v1") or t.get("hash", "")).lower() == ih.lower():
+                row = t
+                break
+        if row is None:
+            return None
+        hh = row.get("infohash_v1") or row.get("hash")
+        stt = row.get("state") or ""
+        return {"path": row.get("save_path") or "",
+                "category": row.get("category") or "", "tags": row.get("tags") or "",
+                "urls": c.trackers(hh) or [],
+                "paused": stt.startswith("paused") or stt.startswith("stopped")}
+    tid = c.find(ih)
+    if tid is None:
+        return None
+    t = c.detail(tid)
+    if t is None:
+        return None
+    anns = [x.get("announce") for x in t.get("trackers", [])
+            if (x.get("announce") or "").strip()]
+    return {"path": t.get("downloadDir") or "", "labels": t.get("labels") or [],
+            "urls": anns, "paused": t.get("status") == TR_STOPPED}
+
+
+def rollback_diff(c, ih, st, url):
+    """比对「按备份要还原成的样子」和「客户端现有条目」，返回出入清单
+    [(字段, 目标值, 现状值)]；客户端没有该条目返回 None。"""
+    cur = cur_view(c, ih)
+    if cur is None:
+        return None
+
+    def np_(p):
+        return os.path.normcase(os.path.normpath(p)) if p else ""
+    out = []
+    if st.get("path") and np_(cur["path"]) != np_(st["path"]):
+        out.append(("保存路径", st["path"], cur["path"]))
+    if url and url not in cur["urls"]:
+        out.append(("tracker", url, " / ".join(cur["urls"])))
+    if c.kind == "qb":
+        if (st.get("category") or "") != cur["category"]:
+            out.append(("分类", st.get("category") or "（无）", cur["category"] or "（无）"))
+        if (st.get("tags") or "") != cur["tags"]:
+            out.append(("标签", st.get("tags") or "（无）", cur["tags"] or "（无）"))
+    else:
+        want = {s.strip() for s in str(st.get("tags") or "").split(",") if s.strip()}
+        have = {str(x) for x in cur.get("labels") or []}
+        if want and not want <= have:
+            out.append(("labels", ",".join(sorted(want)), ",".join(sorted(have)) or "（无）"))
+    if cur["paused"]:
+        out.append(("状态", "回滚后要开始做种", "当前是暂停的"))
+    return out
+
+
+def _tr_addback_seed(c, raw, path, a):
+    """TR 加回的安全走法：暂停+限速加入 → 启动读盘校验 → 100% 才放开做种；
+    一旦回流（真在下载）立刻停住。返回 (id, seeded|backflow|checking)。"""
+    nid = c.add(raw, path, paused=True)
+    try:
+        c.dl_cap(nid, 1)
+    except Exception:
+        pass
+    try:
+        c.start(nid)
+    except Exception:
+        pass
+    gap = float(getattr(a, "poll", 5) or 5)
+    lim = gap * max(1, int(getattr(a, "wait_limit", 30) or 30))
+    waited = 0.0
+    while waited <= lim:
+        s2 = c.state(nid) or {}
+        if s2.get("done"):
+            try:
+                c.dl_cap(nid, 0)
+            except Exception:
+                pass
+            return nid, "seeded"
+        if s2.get("downloading"):
+            try:
+                c.stop(nid)
+            except Exception:
+                pass
+            return nid, "backflow"
+        time.sleep(gap)
+        waited += gap
+    return nid, "checking"
+
+
 def cmd_rollback(a):
     """用 state/backup 里的备份把某个种子加回来（数据从未被删）。
     --hash 给完整 hash 或至少 6 个字符的前缀即可；不给 --hash 就列出全部可回滚的。"""
@@ -1946,12 +2095,47 @@ def cmd_rollback(a):
     url = st.get("old_url") if a.to_old else st.get("new_url")
     if url:
         raw = rewrite_announce(raw, url)
+    diffs = rollback_diff(c, h, st, url)
+    if diffs is not None:                      # 同 hash 条目已经躺在客户端里
+        if not diffs:
+            print("✓ %s  hash=%s  客户端里已有一条一模一样的（tracker/路径/分类/标签都对得上），"
+                  "不用回滚" % (m["name"][:44], h[:12]))
+            return
+        print("⚠ %s  hash=%s  客户端已有同 hash 条目，按备份还原会和它不一致："
+              % (m["name"][:44], h[:12]))
+        for k, a_, b_ in diffs:
+            print("    %s：备份要=%s ｜ 现在是=%s" % (k, str(a_)[:72], str(b_)[:72]))
+        if getattr(a, "rb_keep", False):
+            print("  → 按你的选择：条目原样保留，什么都没改（保持不动）")
+            return
+        if not getattr(a, "rb_force", False):
+            die("要覆盖：rollback --hash %s --force（删掉现有条目、数据文件不动，按备份重新加回）\n"
+                "      不动它：加 --keep（网页/窗口界面在回滚处有对应勾选）" % h[:12])
+        try:
+            if c.kind == "qb":
+                c.remove(h)
+            else:
+                tid = c.find(h)
+                if tid is not None:
+                    c.remove(tid)
+        except Exception as e:
+            die("覆盖失败：现有条目删不掉 —— %s" % str(e)[:120])
+        log("  覆盖：已删掉现有条目（数据文件没动）")
     if c.kind == "qb":
         c.add(raw, st.get("path"), paused=False, category=st.get("category") or "",
               tags=st.get("tags") or "", skip_check=True)
     else:
-        nid = c.add(raw, st.get("path"), paused=False)
+        nid, mode2 = _tr_addback_seed(c, raw, st.get("path"), a)
         log("  已加回 TR id=%s" % nid)
+        if mode2 == "backflow":
+            print("★ %s  hash=%s  盘上数据有缺口，校验中已开始回流 —— 已立刻停住，"
+                  "没有让它继续下载，回滚未完成（数据补全后再回滚一次）"
+                  % (m["name"][:44], h[:12]))
+            return
+        if mode2 == "checking":
+            print("⚠ %s  hash=%s  已按备份加回，但还没校验完（期间限速 1KB/s 下不动东西，"
+                  "符合预期）；校验到 100%% 后自行开始做种即可" % (m["name"][:44], h[:12]))
+            return
     print("✓ %s  hash=%s  已按 %s 加回（tracker=%s）"
           % (m["name"][:44], h[:12], key, (url or "")[:40]))
 
@@ -2029,6 +2213,10 @@ def build_parser():
     ap.add_argument("--selftest", default="", help=argparse.SUPPRESS)
     ap.add_argument("--hash", default="", help="rollback 用：完整 info_hash 或至少 6 位前缀；不给则列出全部可回滚种子")
     ap.add_argument("--to-old", dest="to_old", action="store_true", help="rollback 时换回旧 tracker")
+    ap.add_argument("--force", dest="rb_force", action="store_true",
+                    help="rollback 用：同 hash 条目已在但字段不一致时，删掉它（数据不动）按备份强制覆盖")
+    ap.add_argument("--keep", dest="rb_keep", action="store_true",
+                    help="rollback 用：同 hash 条目已在但字段不一致时，明确选择不动它")
     ap.add_argument("--from", dest="import_from", nargs="+", default=[], metavar="旧目录",
                     help="import 用：旧版工具所在的文件夹（也可直接指旧 exe 或它的 state 目录，"
                          "可给多个）；一键把旧版的备份、客户端实例、台账并进新版")
