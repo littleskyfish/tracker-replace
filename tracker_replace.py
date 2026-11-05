@@ -55,7 +55,7 @@ import binascii
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
-VERSION = "1.5"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+VERSION = "1.6"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
 
 def _base_dir():
     """程序所在目录。PyInstaller 单文件模式下 __file__ 指向退出就销毁的临时解压
@@ -1207,7 +1207,8 @@ def cmd_apply(a):
     if not a.old:
         die("要指定 --old（用来认出哪些种子该换 tracker）")
     total_ok = total_bad = total_skip = 0
-    for inst in load_instances(a):
+    insts = load_instances(a)
+    for inst in insts:
         key = inst["label"]
         try:
             c = connect(inst)
@@ -1215,6 +1216,22 @@ def cmd_apply(a):
             print("%s 连不上：%s" % (key, str(e)[:70]))
             continue
         cp = c.caps()
+        bk = scan_backups()
+        if bk:
+            lost, _nb = missing_rows(c, inst, bk, single=(len(insts) == 1))
+            if lost:
+                if not getattr(a, "auto_fix", True):
+                    print("  ⚠ %d 个有备份的条目已不在列表（多半是旧版误删的）——"
+                          "给了 --no-auto-fix，不自动找回（要修跑 repair）" % len(lost))
+                elif not a.yes:
+                    print("  ⚠ %d 个有备份的条目已不在列表（多半是旧版误删的）——"
+                          "--yes 真执行时会自动找回：只加不删、认出数据零回流才做种"
+                          % len(lost))
+                else:
+                    print("  ⚠ %d 个有备份的条目已不在列表（多半是旧版误删的）→ "
+                          "开工先自动找回（暂停+跳校验加回，认全才恢复做种）" % len(lost))
+                    fx = repair_missing(c, inst, lost, a)
+                    print("  自动找回：%d/%d 恢复做种" % (fx, len(lost)))
         todo = pick_targets(c, a, L, key)
         print("\n%s  %s\n  待处理 %d 个 | 跳过校验：%s" % ("=" * 56, key, len(todo), cp["note"]))
         if not todo:
@@ -1672,6 +1689,108 @@ def cmd_import(a):
           "回滚/修复/列表都用新版自己的 state" % (tot["files"], tot["inst"], tot["ledger"]))
 
 
+def missing_rows(c, inst, rows, single=False):
+    """该客户端列表里缺了哪些有备份的条目（旧版两头空误删的典型现场）。
+    返回（缺失行, 该实例备份总数）；single=只配了一台实例时目录名对不上也认账。"""
+    key = inst["label"].replace(":", "_")
+    have = client_hashes(c)
+    keyrows = [r for r in rows if r["inst"] == key]
+    if not keyrows and single:
+        keyrows = rows
+    return [r for r in keyrows if r["hash"] not in have], len(keyrows)
+
+
+def repair_missing(c, inst, mine, a):
+    """把有备份却已不在列表的条目加回来（只加不删、绝不重新下载）：
+    暂停+跳过校验 → 100% 认出数据且零回流才启动做种，认不出留暂停。
+    返回恢复做种份数。repair 命令和 apply 开工自检共用这套。"""
+    key = inst["label"].replace(":", "_")
+    now = lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fixed = 0
+    for r in mine:
+        h = r["hash"]
+        d = r.get("dir") or os.path.join(ST_DIR, "backup", key)
+        p = os.path.join(d, h + (".old.torrent" if a.to_old else ".new.torrent"))
+        if not os.path.exists(p):
+            p = os.path.join(d, h + ".new.torrent")
+        if not os.path.exists(p):
+            print("  %s %s ✗ 备份文件不全（new/old 都没有）" % (h[:12], (r["name"] or "")[:40]))
+            continue
+        try:
+            st = json.load(open(os.path.join(d, h + ".state.json"), encoding="utf-8"))
+        except Exception:
+            st = {}
+        url = st.get("old_url") if a.to_old else st.get("new_url")
+        raw = open(p, "rb").read()
+        if url:
+            try:
+                raw = rewrite_announce(raw, url)
+            except Exception:
+                pass
+        tag = "%s %s" % (h[:12], (r["name"] or "")[:40])
+        if a.dry_run:
+            print("  %s → 演练：将从 %s 加回（%s）" % (tag, os.path.basename(p), st.get("path") or "?"))
+            continue
+        try:
+            if c.kind == "qb":
+                c.add(raw, st.get("path"), paused=True, skip_check=True,
+                      category=st.get("category") or "", tags=st.get("tags") or "")
+                nid = _qb_wait_id(c, h, tries=max(2, int(getattr(a, "wait_limit", 30))))
+                if not nid:
+                    raise RuntimeError("qB 拒收这份种子")
+                w = _qb_watch(c, nid, a)
+                if w and w["done"] and (w.get("downloaded") or 0) == 0:
+                    try:
+                        c.start(nid)
+                    except Exception:
+                        pass
+                    print("  %s ✓ 已修复，继续做种" % tag)
+                    fixed += 1
+                    result_row({"ts": now(), "inst": inst["label"], "hash": h,
+                                "name": r["name"], "verdict": "✓ 一键修复", "why": ""})
+                else:
+                    if w and (w.get("downloaded", 0) > 0 or w.get("downloading")):
+                        try:
+                            c.stop(nid)
+                        except Exception:
+                            pass
+                    print("  %s ⚠ 没认出数据，已留在暂停（不下载），请人工核对路径" % tag)
+                    result_row({"ts": now(), "inst": inst["label"], "hash": h,
+                                "name": r["name"], "verdict": "⚠ 未认全已暂停",
+                                "why": str(w)[:120]})
+            else:
+                tid = c.add(raw, st.get("path"), paused=True)
+                ok, w = None, None
+                for _ in range(max(3, int(getattr(a, "wait_limit", 30)))):
+                    w = c.state(tid)
+                    if w and w["done"] and (w.get("downloaded") or 0) == 0:
+                        ok = True
+                        break
+                    if w and (w.get("downloaded") or 0) > 0:
+                        break
+                    time.sleep(1)
+                if ok:
+                    c.start(tid)
+                    print("  %s ✓ 已修复，继续做种" % tag)
+                    fixed += 1
+                    result_row({"ts": now(), "inst": inst["label"], "hash": h,
+                                "name": r["name"], "verdict": "✓ 一键修复", "why": ""})
+                else:
+                    try:
+                        c.call("torrent-stop", {"ids": [tid]})
+                    except Exception:
+                        pass
+                    print("  %s ⚠ 没认出数据，已留在暂停（不下载），请人工核对路径" % tag)
+                    result_row({"ts": now(), "inst": inst["label"], "hash": h,
+                                "name": r["name"], "verdict": "⚠ 未认全已暂停",
+                                "why": str(w)[:120]})
+        except Exception as e:
+            print("  %s ✗ 修复失败：%s（数据没动）" % (tag, str(e)[:100]))
+            result_row({"ts": now(), "inst": inst["label"], "hash": h,
+                        "name": r["name"], "verdict": "✗ 修复失败", "why": str(e)[:120]})
+    return fixed
+
+
 def cmd_repair(a):
     """一键修复：备份在（含旧版文件夹里的）、条目却不在客户端了——批量找回来。
     用备份里的 .torrent 暂停+跳过校验加回 → 认出数据(100%)且零回流才启动做种；
@@ -1693,101 +1812,13 @@ def cmd_repair(a):
     if not rows:
         die("没有备份可修复（state/backup 是空的；若备份在旧版工具文件夹里，"
             "用 --pick-state <旧版文件夹> 指过来，界面里也有「选旧工具目录」）")
-    now = lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     fixed = 0
     for inst in insts:
         c = connect(inst)
-        have = client_hashes(c)
-        key = inst["label"].replace(":", "_")
-        keyrows = [r for r in rows if r["inst"] == key]
-        mine = [r for r in keyrows if r["hash"] not in have]
-        if not keyrows and len(insts) == 1:
-            # 只配了一台：备份目录名（旧文件夹那会儿的 host:port）对不上也认账
-            keyrows = rows
-            mine = [r for r in rows if r["hash"] not in have]
+        mine, n = missing_rows(c, inst, rows, single=(len(insts) == 1))
         print("%s：备份 %d 份，其中列表里缺 %d 份"
-              % (inst["label"], len(keyrows), len(mine)))
-        for r in mine:
-            h = r["hash"]
-            d = r.get("dir") or os.path.join(ST_DIR, "backup", key)
-            p = os.path.join(d, h + (".old.torrent" if a.to_old else ".new.torrent"))
-            if not os.path.exists(p):
-                p = os.path.join(d, h + ".new.torrent")
-            if not os.path.exists(p):
-                print("  %s %s ✗ 备份文件不全（new/old 都没有）" % (h[:12], (r["name"] or "")[:40]))
-                continue
-            try:
-                st = json.load(open(os.path.join(d, h + ".state.json"), encoding="utf-8"))
-            except Exception:
-                st = {}
-            url = st.get("old_url") if a.to_old else st.get("new_url")
-            raw = open(p, "rb").read()
-            if url:
-                try:
-                    raw = rewrite_announce(raw, url)
-                except Exception:
-                    pass
-            tag = "%s %s" % (h[:12], (r["name"] or "")[:40])
-            if a.dry_run:
-                print("  %s → 演练：将从 %s 加回（%s）" % (tag, os.path.basename(p), st.get("path") or "?"))
-                continue
-            try:
-                if c.kind == "qb":
-                    c.add(raw, st.get("path"), paused=True, skip_check=True,
-                          category=st.get("category") or "", tags=st.get("tags") or "")
-                    nid = _qb_wait_id(c, h, tries=max(2, int(getattr(a, "wait_limit", 30))))
-                    if not nid:
-                        raise RuntimeError("qB 拒收这份种子")
-                    w = _qb_watch(c, nid, a)
-                    if w and w["done"] and (w.get("downloaded") or 0) == 0:
-                        try:
-                            c.start(nid)
-                        except Exception:
-                            pass
-                        print("  %s ✓ 已修复，继续做种" % tag)
-                        fixed += 1
-                        result_row({"ts": now(), "inst": inst["label"], "hash": h,
-                                    "name": r["name"], "verdict": "✓ 一键修复", "why": ""})
-                    else:
-                        if w and (w.get("downloaded", 0) > 0 or w.get("downloading")):
-                            try:
-                                c.stop(nid)
-                            except Exception:
-                                pass
-                        print("  %s ⚠ 没认出数据，已留在暂停（不下载），请人工核对路径" % tag)
-                        result_row({"ts": now(), "inst": inst["label"], "hash": h,
-                                    "name": r["name"], "verdict": "⚠ 未认全已暂停",
-                                    "why": str(w)[:120]})
-                else:
-                    tid = c.add(raw, st.get("path"), paused=True)
-                    ok, w = None, None
-                    for _ in range(max(3, int(getattr(a, "wait_limit", 30)))):
-                        w = c.state(tid)
-                        if w and w["done"] and (w.get("downloaded") or 0) == 0:
-                            ok = True
-                            break
-                        if w and (w.get("downloaded") or 0) > 0:
-                            break
-                        time.sleep(1)
-                    if ok:
-                        c.start(tid)
-                        print("  %s ✓ 已修复，继续做种" % tag)
-                        fixed += 1
-                        result_row({"ts": now(), "inst": inst["label"], "hash": h,
-                                    "name": r["name"], "verdict": "✓ 一键修复", "why": ""})
-                    else:
-                        try:
-                            c.call("torrent-stop", {"ids": [tid]})
-                        except Exception:
-                            pass
-                        print("  %s ⚠ 没认出数据，已留在暂停（不下载），请人工核对路径" % tag)
-                        result_row({"ts": now(), "inst": inst["label"], "hash": h,
-                                    "name": r["name"], "verdict": "⚠ 未认全已暂停",
-                                    "why": str(w)[:120]})
-            except Exception as e:
-                print("  %s ✗ 修复失败：%s（数据没动）" % (tag, str(e)[:100]))
-                result_row({"ts": now(), "inst": inst["label"], "hash": h,
-                            "name": r["name"], "verdict": "✗ 修复失败", "why": str(e)[:120]})
+              % (inst["label"], n, len(mine)))
+        fixed += repair_missing(c, inst, mine, a)
     if a.dry_run:
         print("演练模式，什么都没改。去掉 --dry-run 就是真修复。")
     else:
@@ -2001,6 +2032,9 @@ def build_parser():
     ap.add_argument("--from", dest="import_from", nargs="+", default=[], metavar="旧目录",
                     help="import 用：旧版工具所在的文件夹（也可直接指旧 exe 或它的 state 目录，"
                          "可给多个）；一键把旧版的备份、客户端实例、台账并进新版")
+    ap.add_argument("--no-auto-fix", dest="auto_fix", action="store_false",
+                    help="apply 开工前默认会自动找回「有备份却已不在列表」的条目"
+                         "（旧版误删的那些，只加不删、认出数据零回流才做种）；加这个关掉")
     ap.add_argument("--pick-state", dest="pick_state", nargs="+", default=[], metavar="旧目录",
                     help="rollback/recover/repair 用：旧版工具所在的文件夹（也可以直接指旧 exe"
                          " 或它的 state 目录），到里面去找备份；可给多个")

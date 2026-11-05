@@ -867,6 +867,55 @@ def main():
         check("QB-17 导完列表直接可见，不再需要 --pick-state",
               h in (r4.stdout + r4.stderr), (r4.stdout + r4.stderr)[-160:])
 
+    # ---------------- QB-18 apply 开工自检：自动找回旧版误删的条目 ----------------
+    if want("QB-18"):
+        print("\nQB-18 apply：干活前发现旧版「两头空」误删的条目，先自动找回再开工")
+        m, p, led, work, (oh, nh) = qb_case("QB-18", "ok")
+        del m.entries[oh]                       # 干完活后条目被旧版误删的最坏现场
+        s2 = Server(m)
+        s2.start()
+        try:
+            time.sleep(0.2)
+            cfg = {"instances": [{"name": "m", "kind": "qb", "host": "127.0.0.1",
+                                  "port": m.port, "user": QB_USER, "password": QB_PW}]}
+            json.dump(cfg, open(os.path.join(work, "cfg.json"), "w"))
+            r = subprocess.run(
+                [sys.executable, "tracker_replace.py", "apply", "-c", "cfg.json",
+                 "--old", "old-tracker.example", "--torrents-dir", "newt",
+                 "--sleep", "0", "--poll", "0.1", "--wait-limit", "2",
+                 "--max-fail", "0", "--yes"],
+                cwd=work, capture_output=True, text=True, timeout=240)
+            out = r.stdout + r.stderr
+            e = m.entries.get(oh) or {}
+            check("QB-18 开工前报出误删并自动找回",
+                  r.returncode == 0 and "自动找回" in out and oh in m.entries, out[-260:])
+            check("QB-18 找回后认全数据恢复做种且零回流",
+                  e.get("state") == "uploading" and e.get("downloaded") == 0, str(e)[:200])
+            check("QB-18 找回用新 tracker",
+                  (m.entries.get(oh) or {}).get("trackers") == [NEW],
+                  str((m.entries.get(oh) or {}).get("trackers")))
+            r2 = subprocess.run(
+                [sys.executable, "tracker_replace.py", "apply", "-c", "cfg.json",
+                 "--old", "old-tracker.example", "--torrents-dir", "newt",
+                 "--sleep", "0", "--poll", "0.1", "--wait-limit", "2",
+                 "--max-fail", "0", "--yes"],
+                cwd=work, capture_output=True, text=True, timeout=240)
+            check("QB-18 没丢东西时不多嘴、不误动",
+                  "自动找回" not in (r2.stdout + r2.stderr),
+                  (r2.stdout + r2.stderr)[-160:])
+            del m.entries[oh]                   # 再演一次误删，这回用 --no-auto-fix 关掉
+            r3 = subprocess.run(
+                [sys.executable, "tracker_replace.py", "apply", "-c", "cfg.json",
+                 "--old", "old-tracker.example", "--torrents-dir", "newt",
+                 "--sleep", "0", "--poll", "0.1", "--wait-limit", "2",
+                 "--max-fail", "0", "--yes", "--no-auto-fix"],
+                cwd=work, capture_output=True, text=True, timeout=240)
+            check("QB-18 --no-auto-fix 时只报不动手",
+                  "--no-auto-fix" in (r3.stdout + r3.stderr) and oh not in m.entries,
+                  (r3.stdout + r3.stderr)[-200:])
+        finally:
+            s2.stop()
+
     # ---------------- TR-1 校验通过 ----------------
     if want("TR-1"):
         print("\nTR-1 Transmission 校验通过：限速在启动之前、数据不删、通过才做种")
