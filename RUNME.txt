@@ -1,0 +1,15 @@
+tracker替换 —— 批量换 tracker（qBittorrent / Transmission）
+
+A. 什么都不想装（Linux）
+   sh linux/run.sh gui         原生窗口
+   sh linux/run.sh ui          网页窗口（服务器／没图形库用这个，只监听 127.0.0.1）
+   ./linux/tracker-replace doctor --old old-tracker.example     命令行体检
+
+B. 机器上有 Python 3.7+
+   python3 tracker_replace.py gui
+   python3 tracker_replace.py doctor --old old-tracker.example
+   自检：python3 tests/selftest.py
+
+C. Windows 见 WINDOWS.txt
+
+安全：校验没过的种子不会被自动做种；数据文件永不删除；每步有台账、可 rollback。
