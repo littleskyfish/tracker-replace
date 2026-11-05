@@ -1,0 +1,13 @@
+# 本机才有的东西，一律不进库
+clients.json
+clients.local.json
+config.json
+guiconfig.json
+state/
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc
+*.log
+nohup.out
