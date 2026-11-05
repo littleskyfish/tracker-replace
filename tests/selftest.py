@@ -112,8 +112,9 @@ def parse_multipart(body, ctype):
 class MockQB(object):
     """按 qB 4.6/5.0 的真实行为建模：私有种子碰到重复 hash → 直接回 Fails."""
 
-    def __init__(self, torrent_raw, mode="ok", unwanted=False):
-        self.mode = mode                       # ok backflow badtracker never addfail stuckold
+    def __init__(self, torrent_raw, mode="ok", unwanted=False, api="2.0.1"):
+        self.api = api                         # 报告的 webapiVersion：<2.1 走删除重建，≥2.1 可原地 editTracker
+        self.mode = mode                       # ok backflow badtracker never addfail stuckold + editfail
         #                                addfail_newonly（新种子恒 Fails.） addrace（头两次 Fails. 后恢复）
         self.ih = ih_of(torrent_raw)
         self.calls = []                        # [(path, {参数})]
@@ -169,7 +170,7 @@ class MockQB(object):
                 if u.path == "/api/v2/app/version":
                     return self._send(200, b"v4.6.7")
                 if u.path == "/api/v2/app/webapiVersion":
-                    return self._send(200, b"2.9.2")
+                    return self._send(200, getattr(app, "api", "2.0.1").encode())
                 if u.path == "/api/v2/torrents/info":
                     out = []
                     for h, e in app.entries.items():
@@ -242,6 +243,18 @@ class MockQB(object):
                     for h in json.loads(fields.get("hashes") or "[]"):
                         app.entries.pop(h, None)
                     return self._send(200, b"")
+                if u.path == "/api/v2/torrents/editTracker":
+                    e = app.entries.get(fields.get("hash"))
+                    if e is None:
+                        return self._send(404, b"not found")
+                    if app.mode == "editfail":
+                        return self._send(500, b"boom")
+                    ou, nu = fields.get("origUrl"), fields.get("newUrl")
+                    tr = [nu if x == ou else x for x in e["trackers"]]
+                    if ou not in e["trackers"]:
+                        tr.append(nu)
+                    e["trackers"] = [x for x in tr if x]
+                    return self._send(200, b"Ok.")
                 if u.path == "/api/v2/torrents/filePrio":
                     return self._send(200, b"")
                 return self._send(404, b"nope")
@@ -499,9 +512,9 @@ def check(name, cond, note=""):
     return bool(cond)
 
 
-def qb_case(case, mode, diff_info=False, unwanted=False, extra=(), yes=True):
+def qb_case(case, mode, diff_info=False, unwanted=False, extra=(), yes=True, api="2.0.1"):
     old, new, oh, nh = make_pair("Movie A", diff_info=diff_info)
-    m = MockQB(old, mode=mode, unwanted=unwanted)   # 客户端里躺着的是旧种子
+    m = MockQB(old, mode=mode, unwanted=unwanted, api=api)   # 客户端里躺着的是旧种子
     m.old_raw = old
     s = Server(m)
     s.start()
@@ -531,7 +544,7 @@ def main():
 
     # ---------------- QB-1 同 hash 正常路径 ----------------
     if want("QB-1"):
-        print("\nQB-1 qB 同 hash（站点只换 tracker）：删条目→加新→确认→做种")
+        print("\nQB-1 qB 同 hash（老 WebAPI/回退路线）：删条目→加新→确认→做种")
         m, p, led, work, (oh, nh) = qb_case("QB-1", "ok")
         d = done_of(led)
         check("换成功且记账", oh in d, "%s" % list(d))
@@ -584,13 +597,13 @@ def main():
 
     # ---------------- QB-6 同 hash：新种子加不进来 → 自动回灌 ----------------
     if want("QB-6"):
-        print("\nQB-6 同 hash 但新种子没能加进去 → 自动把旧条目加回继续做种")
+        print("\nQB-6 同 hash 但头次 add 没进 → 不硬等：回看重试后最终换成、继续做种")
         m, p, led, work, (oh, nh) = qb_case("QB-6", "never")
-        check("结论是失败", p.returncode != 0)
-        check("旧条目被回灌回来", oh in m.entries, str(list(m.entries.keys())))
+        check("回看重试后换成功", p.returncode == 0 and oh in done_of(led), "rc=%s" % p.returncode)
+        check("条目一直存在（没两头空）", oh in m.entries, str(list(m.entries.keys())))
         e = m.entries.get(oh) or {}
-        check("回灌后 tracker 还是旧的", e.get("trackers") == [OLD], str(e.get("trackers")))
-        check("回灌后继续做种", e.get("state") == "uploading", str(e.get("state")))
+        check("tracker 最终是新的", e.get("trackers") == [NEW], str(e.get("trackers")))
+        check("最终在做种", e.get("state") == "uploading", str(e.get("state")))
 
     # ---------------- QB-7 同 hash：旧条目赖着不走 ----------------
     if want("QB-7"):
@@ -1163,6 +1176,75 @@ def main():
         finally:
             s2.stop()
 
+
+    # ---------------- QB-19 同 hash 原地改 tracker ----------------
+    if want("QB-19"):
+        print("\nQB-19 WebAPI>=2.1：同 hash 原地 editTracker，不删条目")
+        m, p, led, work, (oh, nh) = qb_case("QB-19", "ok", api="2.9.2")
+        check("换成功且记账", oh in done_of(led), str(list(done_of(led))))
+        check("用了 editTracker", any(x == "/api/v2/torrents/editTracker" for x, _ in m.calls))
+        check("全程没删条目", not any(x == "/api/v2/torrents/delete" for x, _ in m.calls),
+              str([x for x, _a in m.calls]))
+        check("也没走加新条目", not any(x == "/api/v2/torrents/add" for x, _ in m.calls))
+        e = m.entries.get(oh) or {}
+        check("tracker 换成新的", e.get("trackers") == [NEW], str(e.get("trackers")))
+        check("条目还是原来那个", list(m.entries.keys()) == [oh], str(list(m.entries.keys())))
+        check("零等待：全程不暂停不恢复", not any(
+            x in ("/api/v2/torrents/pause", "/api/v2/torrents/resume") for x, _ in m.calls),
+            str([x for x, _a in m.calls]))
+        check("改完恢复做种", e.get("state") == "uploading", str(e.get("state")))
+        sjs = []
+        for root, _d, fs in os.walk(work):
+            sjs += [os.path.join(root, x) for x in fs if x.endswith(".state.json")]
+        stt = json.load(open(sjs[0], encoding="utf-8")) if sjs else {}
+        check("台账留了原地改标记和改前快照", stt.get("inplace") is True and stt.get("trackers_before"),
+              str(sorted(stt)))
+
+    # ---------------- QB-20 editTracker 失败自动回退旧路线 ----------------
+    if want("QB-20"):
+        print("\nQB-20 editTracker 报错：自动回退到删除→重加，整批不中断")
+        m, p, led, work, (oh, nh) = qb_case("QB-20", "editfail", api="2.9.2")
+        check("最终仍然换成功", oh in done_of(led), str(list(done_of(led))))
+        check("确实先试过原地", any(x == "/api/v2/torrents/editTracker" for x, _ in m.calls))
+        check("回退走了删除→重加", m.order("/api/v2/torrents/delete", "/api/v2/torrents/add"))
+        e = m.entries.get(oh) or {}
+        check("tracker 最终是新的", e.get("trackers") == [NEW], str(e.get("trackers")))
+
+    # ---------------- QB-21 --inplace off 强制旧路线 ----------------
+    if want("QB-21"):
+        print("\nQB-21 新 WebAPI 但 --inplace off：仍走删除→重加")
+        m, p, led, work, (oh, nh) = qb_case("QB-21", "ok", api="2.9.2",
+                                            extra=("--inplace", "off"))
+        check("换成功", oh in done_of(led))
+        check("没调 editTracker", not any(x == "/api/v2/torrents/editTracker" for x, _ in m.calls))
+        check("走了删除→重加", m.order("/api/v2/torrents/delete", "/api/v2/torrents/add"))
+
+    # ---------------- PEND-1 兜底等待不守活寡 ----------------
+    if want("PEND-1"):
+        print("\nPEND-1 qB 删旧种没收尾：不硬等，记 ⏳ 先看别的，自动回看两次再放弃")
+        m, p, led, work, (oh, nh) = qb_case("PEND-1", "stuckold", extra=("--wait-limit", "1"))
+        out = p.stdout
+        check("流程没卡死、正常收工", p.returncode in (0, 21), "rc=%s" % p.returncode)
+        check("标了 ⏳ 并且先去看别的种子", "⏳" in out and "先看别的" in out)
+        check("自动回看了（不止一次）", out.count("⏳") >= 2, "⏳x%d" % out.count("⏳"))
+        check("最后记为失败单、没丢", oh in failed_of(led), str(list(failed_of(led))))
+        check("旧条目还在列表里（数据没受伤）", oh in m.entries)
+
+    # ---------------- STOP-1 停止钩子 ----------------
+    if want("STOP-1"):
+        print("\nSTOP-1 界面停止钩子：只在种子之间生效")
+        import tracker_replace as TR
+        check("默认不停止", TR._stopped() is False)
+        TR.STOP_CHECK = lambda: True
+        check("置位后能读到", TR._stopped() is True)
+
+        def _boom():
+            raise RuntimeError("界面挂了")
+        TR.STOP_CHECK = _boom
+        check("钩子异常不算停止（任务照常跑）", TR._stopped() is False)
+        TR.STOP_CHECK = lambda: False
+        check("复位", TR._stopped() is False)
+
     if want("VER"):
         print("\nVER 版本号与界面按钮")
         check("有版本号、形如 x.y", bool(re.match(r"^\d+\.\d+", tracker_replace.VERSION)),
@@ -1179,7 +1261,8 @@ def main():
         for _f in ("tracker_ui.py", "tracker_replace.py", "README.md", "RUNME.txt",
                    "WINDOWS.txt", "build_linux.sh", "build_windows.bat",
                    "config.example.json", "requirements.txt", "tracker-replace.sh",
-                   "tracker-replace-gui.bat", "tracker-replace-ui.bat"):
+                   "tracker-replace-gui.bat", "tracker-replace-ui.bat", "build_mac.sh",
+                   "tracker-replace-gui.command", "tracker-replace-ui.command"):
             _p = os.path.join(ROOT, _f)
             if not os.path.exists(_p):
                 continue
