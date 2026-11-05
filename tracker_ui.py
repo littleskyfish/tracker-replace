@@ -91,6 +91,7 @@ class Engine(object):
         self.thread = None
         self.lines = []
         self.lock = threading.Lock()
+        self.stop_ev = threading.Event()          # "■ 停止任务"：跑完当前这个种子就收手
 
     def emit(self, text):
         for ln in str(text).splitlines() or [""]:
@@ -122,7 +123,8 @@ class Engine(object):
             max_fail=int(form.get("maxfail") or 5),
             hash=(form.get("hash") or "").strip(), to_old=bool(form.get("to_old")),
             rb_force=bool(form.get("rb_force")), rb_keep=bool(form.get("rb_keep")),
-            no_cap=bool(form.get("nocap")), wait_limit=int(form.get("wait_limit") or 30))
+            no_cap=bool(form.get("nocap")), wait_limit=int(form.get("wait_limit") or 6),
+            inplace=(form.get("inplace") or "auto"))
 
     def start(self, cmd, form, instances):
         if self.busy:
@@ -143,9 +145,21 @@ class Engine(object):
         self.thread.start()
         return True
 
+    def stop(self):
+        """停止当前批量任务：正在处理的种子会跑完（成功或自动回灌），
+        剩下的不再处理。绝不拦腰截断一个种子。"""
+        if not self.busy:
+            self.emit("★ 当前没有任务在跑")
+            return False
+        self.stop_ev.set()
+        self.emit("★ 已请求停止：处理完当前这个种子就停，剩下的不再处理")
+        return True
+
     def _work(self, cmd, ns):
         sink = lambda s: self.emit(s)                      # noqa: E731
         tracker_replace.set_logger(sink)
+        self.stop_ev.clear()
+        tracker_replace.STOP_CHECK = self.stop_ev.is_set
         buf = _Writer(sink)
         t0 = time.time()
         try:
@@ -168,6 +182,7 @@ class Engine(object):
             sink("★ 出错了：%s" % str(e)[:300])
         finally:
             tracker_replace.set_logger(None)
+            tracker_replace.STOP_CHECK = lambda: False
             self.busy = False
             sink("―――― 这一步用了 %.0f 秒 ――――" % (time.time() - t0))
 
@@ -206,6 +221,7 @@ def run_tk(conf, selftest=None):
     root = tk.Tk()
     root.title("tracker替换 %s —— 批量换 tracker（qB / Transmission）" % tracker_replace.VERSION)
     root.geometry("1020x700")
+    root.minsize(900, 620)     # 小于这个宽窄排版就摆不开了，让它先撑住
 
     insts = list(conf.get("instances", []))
     vars_ = {k: tk.StringVar(value=str(conf.get(k, "")))
@@ -226,6 +242,7 @@ def run_tk(conf, selftest=None):
              "tdir": vars_["tdir"].get().strip(), "only": vars_["only"].get().strip(),
              "layout": vars_["layout"].get().strip(), "hash": vars_["hash"].get().strip(),
              "seed_after": v_seed.get(), "nocap": v_nocap.get(), "confirmed": v_confirm.get(),
+             "inplace": ("off" if v_ipoff.get() else "auto"),
              "rb_force": v_rbforce.get(), "rb_keep": v_rbkeep.get()}
         for k, v in (("limit", v_limit), ("budget", v_budget), ("poll", v_poll),
                      ("sleep", v_sleep), ("maxfail", v_maxfail)):
@@ -415,14 +432,22 @@ def run_tk(conf, selftest=None):
         ttk.Button(win, text="把选中的填进 hash 框", command=use).pack(fill="x")
         lb.pack(fill="both", expand=True)
 
+    # 选项分两行放，一行塞八个控件在小窗口上会挤到界外显示不全
     opt = ttk.Frame(mid)
-    opt.grid(row=4, column=0, columnspan=6, sticky="w", pady=4)
-    ttk.Checkbutton(opt, text="校验通过就自动开始做种", variable=v_seed).pack(side="left", padx=6)
-    ttk.Checkbutton(opt, text="TR 校验期不加 1KB/s 限速", variable=v_nocap).pack(side="left", padx=6)
-    ttk.Checkbutton(opt, text="我已确认，可以动真格", variable=v_confirm).pack(side="left", padx=6)
-    ttk.Button(opt, text="选回滚种子", command=pick_rollback).pack(side="left", padx=6)
-    ttk.Checkbutton(opt, text="回滚遇不一致→强制覆盖", variable=v_rbforce).pack(side="left", padx=2)
-    ttk.Checkbutton(opt, text="→保持不动", variable=v_rbkeep).pack(side="left", padx=2)
+    opt.grid(row=4, column=0, columnspan=6, sticky="we", pady=4)
+    mid.columnconfigure(0, weight=1)
+    opt1 = ttk.Frame(opt)
+    opt1.pack(fill="x")
+    ttk.Checkbutton(opt1, text="校验通过就自动开始做种", variable=v_seed).pack(side="left", padx=6)
+    ttk.Checkbutton(opt1, text="TR 校验期不加 1KB/s 限速", variable=v_nocap).pack(side="left", padx=6)
+    v_ipoff = tk.BooleanVar(value=False)
+    ttk.Checkbutton(opt1, text="同 hash 不原地改、改用删除重建", variable=v_ipoff).pack(side="left", padx=6)
+    ttk.Checkbutton(opt1, text="我已确认，可以动真格", variable=v_confirm).pack(side="left", padx=6)
+    opt2 = ttk.Frame(opt)
+    opt2.pack(fill="x", pady=(2, 0))
+    ttk.Button(opt2, text="选回滚种子", command=pick_rollback).pack(side="left", padx=(6, 2))
+    ttk.Checkbutton(opt2, text="回滚遇不一致→强制覆盖", variable=v_rbforce).pack(side="left", padx=2)
+    ttk.Checkbutton(opt2, text="→保持不动", variable=v_rbkeep).pack(side="left", padx=2)
 
     def import_old():
         d = filedialog.askdirectory(title="选旧版工具所在的文件夹（里面要有 state/backup）",
@@ -452,12 +477,16 @@ def run_tk(conf, selftest=None):
         status.configure(text="已从旧版导入：备份 %d、实例 %d、台账 %d"
                          % (rep["files"], rep["inst"], rep["ledger"]))
 
-    ttk.Button(opt, text="导入旧版备份/配置", command=import_old).pack(side="left", padx=6)
-    ttk.Button(opt, text="存下这套设置", command=save_form).pack(side="right", padx=6)
+    ttk.Button(opt2, text="导入旧版备份/配置", command=import_old).pack(side="left", padx=12)
+    ttk.Button(opt2, text="存下这套设置", command=save_form).pack(side="right", padx=6)
 
-    # ---- 按钮 ----
+    # ---- 按钮：一行主流程、一行工具，避免一排挤爆显示不全 ----
     btns = ttk.Frame(root)
     btns.pack(fill="x", padx=8)
+    b1 = ttk.Frame(btns)
+    b1.pack(fill="x")
+    b2 = ttk.Frame(btns)
+    b2.pack(fill="x")
     status = ttk.Label(root, text="空闲")
     status.pack(anchor="w", padx=10)
 
@@ -476,7 +505,7 @@ def run_tk(conf, selftest=None):
         txt.delete("1.0", "end")
         txt.insert("end", "（日志区已清空；后台要是有任务在跑，新日志会继续出现）\n")
 
-    ttk.Button(btns, text="清空日志", command=clear_log).pack(side="right", padx=4)
+    ttk.Button(b2, text="清空日志", command=clear_log).pack(side="right", padx=4, pady=(0, 4))
 
     def push(s):
         q.put(s)
@@ -490,11 +519,11 @@ def run_tk(conf, selftest=None):
                                                             "rollback": "回滚",
                                                             "repair": "一键修复"}[cmd])
 
-    for t, c, col in (("① 体检", "doctor", "#0a6"), ("② 演练", "dry", "#06a"),
-                      ("③ 真执行", "run", "#a00"), ("台账", "status", "#555"),
-                      ("回滚这个 hash", "rollback", "#a60"),
-                      ("一键修复丢失", "repair", "#070")):
-        ttk.Button(btns, text=t, command=lambda x=c: do(x)).pack(side="left", padx=4, pady=4)
+    for t, c in (("① 体检", "doctor"), ("② 演练", "dry"), ("③ 真执行", "run")):
+        ttk.Button(b1, text=t, command=lambda x=c: do(x)).pack(side="left", padx=4, pady=4)
+    ttk.Button(b1, text="■ 停止任务", command=lambda: eng.stop()).pack(side="left", padx=14, pady=4)
+    for t, c in (("看台账", "status"), ("回滚", "rollback"), ("一键修复丢失", "repair")):
+        ttk.Button(b2, text=t, command=lambda x=c: do(x)).pack(side="left", padx=4, pady=(0, 4))
 
     def drain():
         try:
@@ -631,7 +660,7 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
  .hint{color:#6b7280;font-size:12px}
 </style></head><body>
 <header><b>tracker替换</b><span>批量换 tracker · qBittorrent / Transmission · 数据文件永不删除</span>
-<span id="busy" style="margin-left:auto"></span></header>
+<button id="stopbtn" onclick="stopTask()" style="margin-left:auto;background:#a00;color:#fff;border:0;border-radius:6px;padding:6px 14px;cursor:pointer">■ 停止任务</button><span id="busy"></span></header>
 <main>
  <div class="card l">
   <h3>客户端实例 <span class="hint" id="ver"></span></h3>
@@ -673,6 +702,7 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
   <div class="row">
    <label><input type="checkbox" id="seed" checked>校验通过就自动开始做种</label>
    <label><input type="checkbox" id="nocap">TR 校验期不加 1KB/s 限速</label>
+   <label><input type="checkbox" id="ipoff">同 hash 不原地改、改用删除重建</label>
    <label><input type="checkbox" id="confirm">我已确认，可以动真格</label></div>
   <div>
    <button class="btn b1" onclick="go('doctor')">① 体检</button>
@@ -709,9 +739,11 @@ function del(i){S.instances.splice(i,1);api('/api/save',{instances:S.instances})
 function form(){return{old:old.value,new_url:new_url.value,tdir:tdir.value,only:only.value,
  limit:limit.value,budget:budget.value,poll:poll.value,sleep:sleep.value,maxfail:maxfail.value,
  hash:hash.value,seed:seed.checked,nocap:nocap.checked,confirm:confirm.checked,
+ inplace:document.getElementById('ipoff').checked?'off':'auto',
  rb_force:rbforce.checked,rb_keep:rbkeep.checked};}
 async function go(c){const r=await api('/api/run',{cmd:c,form:form(),instances:S.instances});
  if(r.err)log0('★ '+r.err);}
+async function stopTask(){await api('/api/stop',{});}
 let idx=0;
 function clearLog(){const e=document.getElementById('log');e.innerHTML='';
  log0('（日志区已清空；后台要是有任务在跑，新日志会继续出现）');}
@@ -855,6 +887,7 @@ def run_web(conf, port, open_browser=True):
                         "limit": f.get("limit", 0), "budget": f.get("budget", 1800),
                         "poll": f.get("poll", 5), "sleep": f.get("sleep", 1),
                         "maxfail": f.get("maxfail", 5), "nocap": f.get("nocap"),
+                        "inplace": f.get("inplace", "auto"),
                         "seed_after": f.get("seed", True),
                         "confirmed": f.get("confirm")}
                 insts = b.get("instances") or state["conf"].get("instances", [])
@@ -867,6 +900,8 @@ def run_web(conf, port, open_browser=True):
                 save_conf(state["conf"])
                 ok = eng.start(b.get("cmd", "dry"), form, insts)
                 return self._json({"ok": ok})
+            if self.path == "/api/stop":
+                return self._json({"ok": eng.stop()})
             return self._json({"err": "nope"}, 404)
 
     class Srv(socketserver.ThreadingMixIn, http.server.HTTPServer):
