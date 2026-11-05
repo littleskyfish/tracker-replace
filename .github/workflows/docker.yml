@@ -35,6 +35,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=semver,pattern={{version}}
+            type=match,pattern=\d+\.\d+(\.\d+)?,group=0
             type=raw,value=latest
 
       - name: 构建并推送（amd64 + arm64）
