@@ -1,4 +1,4 @@
-# tracker替换 网页版 compose 模板
+# tracker替换 网页版 compose 模板（镜像/端口/卷按需改，注释掉的映射要用就解开）
 # 用法：docker compose up -d --build   然后局域网设备浏览器打开 http://这台机器的IP:8642
 # 首次启动看登录密码：docker compose logs tracker-replace
 services:
