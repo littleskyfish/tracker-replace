@@ -1455,6 +1455,86 @@ def main():
         check("原生窗口有清空日志按钮", us.count("清空日志") >= 2)
         check("网页窗口有清空日志按钮", "clearLog()" in us)
 
+    # ---------------- PROXY-1 公网域名/反代报错说人话 ----------------
+    if want("PROXY-1"):
+        print("\nPROXY-1 反代/公网域名：400/401/403/404 要翻译成人话")
+
+        def canned(code, body, hdrs=None):
+            class App:
+                def handler(self):
+                    class H(BaseHTTPRequestHandler):
+                        protocol_version = "HTTP/1.0"      # 一次一发，免得留着半截请求体
+
+                        def log_message(self, *a):
+                            pass
+
+                        def _reply(self):
+                            b = body.encode()
+                            self.send_response(code)
+                            self.send_header("Content-Type", "text/html")
+                            for k, v in (hdrs or {}).items():
+                                self.send_header(k, v)
+                            self.send_header("Content-Length", str(len(b)))
+                            self.end_headers()
+                            self.wfile.write(b)
+
+                        do_GET = do_POST = _reply
+                    return H
+            return App()
+
+        NG400 = ("<html><head><title>400 Bad Request</title></head><body>"
+                 "<center><h1>400 Bad Request</h1></center>"
+                 "<center>The plain HTTP request was sent to HTTPS port</center>"
+                 "</body></html>")
+        h = tracker_replace.http_hint
+
+        check("nginx 那句 400 → 说成「端口是 https、协议填错了」",
+              "说的是 https" in h(400, NG400), h(400, NG400))
+        check("这句也算协议填反（会自己换 https 再试）",
+              tracker_replace.looks_like_proto_mismatch(h(400, NG400)))
+        check("401 带 Basic 头 → 说是前面还挡了一层",
+              "Basic" in h(401, "", {"WWW-Authenticate": 'Basic realm="gw"'}))
+        check("前置 Basic 认证不算协议问题（别乱换协议）",
+              not tracker_replace.looks_like_proto_mismatch(
+                  h(401, "", {"WWW-Authenticate": 'Basic realm="gw"'})))
+        check("404 → 说是挂在子路径下", "子路径" in h(404, "not found"))
+        check("403 → 提白名单/CSRF", "白名单" in h(403, "forbidden"))
+        check("正常回包不硬凑解释", h(200, "Ok.") == "")
+
+        s400 = Server(canned(400, NG400))
+        s400.start()
+        s401 = Server(canned(401, "Authorization required",
+                             {"WWW-Authenticate": 'Basic realm="gw"'}))
+        s401.start()
+        try:
+            try:
+                tracker_replace.QbClient("127.0.0.1", s400.port, "u", "p", "http")
+                check("qB 明文打到 https 口：要说清怎么改", False, "居然没报错")
+            except Exception as e:
+                check("qB 明文打到 https 口：报错直接教怎么改",
+                      "说的是 https" in str(e), str(e)[:120])
+            try:
+                tracker_replace.QbClient("127.0.0.1", s401.port, "u", "p", "http")
+                check("qB 撞上前置 Basic：要说清", False, "居然没报错")
+            except Exception as e:
+                check("qB 撞上前置 Basic：说是前置挡了一层",
+                      "Basic" in str(e), str(e)[:120])
+            msg = ""
+            try:
+                tracker_replace.TrClient("127.0.0.1", s400.port, "u", "p", "http")
+            except Exception as e:
+                msg = str(e)
+            check("TR 撞同一句 nginx 400 也说人话", "说的是 https" in msg, msg[:120])
+            msg2 = ""
+            try:
+                tracker_replace.TrClient("127.0.0.1", s401.port, "u", "p", "http")
+            except Exception as e:
+                msg2 = str(e)
+            check("TR 撞前置 Basic 也说人话", "Basic" in msg2, msg2[:120])
+        finally:
+            s400.stop()
+            s401.stop()
+
     # ---------------- 汇总 ----------------
     bad = [r for r in RESULTS if not r[1]]
     print("\n" + "=" * 62)
