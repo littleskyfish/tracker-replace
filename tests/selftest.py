@@ -17,6 +17,7 @@
 """
 import base64
 import hashlib
+import io
 import json
 import os
 import re
@@ -509,8 +510,11 @@ RESULTS = []
 
 
 def check(name, cond, note=""):
+    if not isinstance(note, str):
+        note = repr(note)            # 备注图省事传了 list/dict 也别炸
     RESULTS.append((name, bool(cond), note))
-    print("  %s %s%s" % ("✓" if cond else "✗", name, ("   " + note) if note else ""))
+    print("  %s %s%s" % ("✓" if cond else "✗", name, ("   " + note.replace("\n", " ")[:200])
+                         if note else ""))
     return bool(cond)
 
 
@@ -1137,11 +1141,192 @@ def main():
             finally:
                 s.stop()
 
+    if want("PREFIX-1"):
+        print("\nPREFIX-1 反代子路径、前置 Basic、明文与密码落盘")
+        seen = {"qb": [], "tr": []}
+
+        class Fronted(BaseHTTPRequestHandler):
+            """假反代：前面挡一层 Basic，后面才是下载器（地址还挂在子路径上）。"""
+
+            def log_message(self, *a):
+                pass
+
+            def _auth(self):
+                v = self.headers.get("Authorization", "")
+                if not v.startswith("Basic "):
+                    return ""
+                try:
+                    return base64.b64decode(v[6:]).decode("utf-8", "replace")
+                except Exception:
+                    return ""
+
+            def _hit(self, body=""):
+                rec = {"path": self.path, "auth": self._auth(), "body": body[:120]}
+                seen["tr" if "transmission" in self.path else "qb"].append(rec)
+
+            def _body(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                return self.rfile.read(n).decode("utf-8", "replace")
+
+            def _send(self, code, body=b"", ctype="text/plain", hdrs=None):
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                for k, v in (hdrs or {}).items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if body:
+                    self.wfile.write(body)
+
+        class QbFront(Fronted):
+            def do_POST(self):
+                body = self._body()
+                self._hit(body)
+                if self._auth() != "front:frontpw":
+                    return self._send(401, b"need front basic")
+                self._send(200, b"Ok.")
+
+            def do_GET(self):
+                self._hit()
+                if self._auth() != "front:frontpw":
+                    return self._send(401, b"need front basic")
+                self._send(200, b"2.11.0" if "webapiVersion" in self.path else b"v5.0.0")
+
+        class TrFront(Fronted):
+            def do_POST(self):
+                body = self._body()
+                self._hit(body)
+                if self._auth() != "front:frontpw":
+                    return self._send(401, b"need front basic")
+                if self.headers.get("X-Transmission-Session-Id", "0") in ("", "0"):
+                    return self._send(409, hdrs={"X-Transmission-Session-Id": "SID"})
+                self._send(200, json.dumps({"result": "success", "arguments": {
+                    "session": {"version": "4.0.0", "rpc-version": 17},
+                    "download-dir": "/d"}}).encode(), "application/json")
+
+        qs = ThreadingHTTPServer(("127.0.0.1", 0), QbFront)
+        ts = ThreadingHTTPServer(("127.0.0.1", 0), TrFront)
+        for srv in (qs, ts):
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            check("split_prefix：域名带子路径要拆干净",
+                  tracker_replace.split_prefix("nas.xx.com/qb") == ("nas.xx.com", "/qb")
+                  and tracker_replace.split_prefix("10.1.2.3") == ("10.1.2.3", "")
+                  and tracker_replace.split_prefix("/tr/") == ("", "/tr"))
+            check("is_public_host：内网/单机名不算公网",
+                  not tracker_replace.is_public_host("10.10.150.218")
+                  and not tracker_replace.is_public_host("192.168.1.9")
+                  and not tracker_replace.is_public_host("nas")
+                  and not tracker_replace.is_public_host("qb.home.test"))
+            check("is_public_host：公网 IP 算公网，解析不出也按公网",
+                  tracker_replace.is_public_host("203.0.113.9")
+                  and tracker_replace.is_public_host("no-such-host.invalid"))
+
+            qport, tport = qs.server_address[1], ts.server_address[1]
+            seen["qb"] = []
+            c = tracker_replace.connect({"host": "127.0.0.1", "port": qport, "kind": "qb",
+                                         "user": "u", "password": "p", "scheme": "http",
+                                         "prefix": "/qb", "proxy_user": "front",
+                                         "proxy_pass": "frontpw"})
+            check("qB 挂在 /qb 子路径下能连上",
+                  c.kind == "qb" and c.base == "http://127.0.0.1:%d/qb" % qport, c.base)
+            check("请求真打在 /qb/api/v2/... 上",
+                  seen["qb"] and all(r["path"].startswith("/qb/api/v2") for r in seen["qb"]),
+                  [r["path"] for r in seen["qb"]][:3])
+            check("发给反代的是前置账号那套，不是 WebUI 账号",
+                  [r["auth"] for r in seen["qb"] if r["auth"]]
+                  and all(r["auth"] == "front:frontpw" for r in seen["qb"] if r["auth"]),
+                  [r["auth"] for r in seen["qb"]][:3])
+
+            err = ""
+            try:
+                tracker_replace.connect({"host": "127.0.0.1", "port": qport, "kind": "qb",
+                                         "user": "u", "password": "p", "scheme": "http",
+                                         "prefix": "/qb"})
+            except Exception as e:
+                err = str(e)
+            check("前置那层账号没给：说是 401/Basic，不当成本站密码错",
+                  "401" in err or "Basic" in err, err[:100])
+
+            seen["tr"] = []
+            c2 = tracker_replace.connect({"host": "127.0.0.1", "port": tport, "kind": "tr",
+                                          "user": "rpc", "password": "rpcpw", "scheme": "http",
+                                          "prefix": "/tr", "proxy_user": "front",
+                                          "proxy_pass": "frontpw"})
+            check("TR 挂在 /tr 子路径下能连上",
+                  c2.kind == "tr"
+                  and c2.url == "http://127.0.0.1:%d/tr/transmission/rpc" % tport, c2.url)
+            check("TR 的 RPC 真打在子路径上",
+                  seen["tr"] and all(r["path"] == "/tr/transmission/rpc" for r in seen["tr"]),
+                  [r["path"] for r in seen["tr"]][:2])
+            check("TR 前置 Basic 优先于 RPC 账号",
+                  seen["tr"] and all(r["auth"] == "front:frontpw" for r in seen["tr"]),
+                  [r["auth"] for r in seen["tr"]][:2])
+
+            import socket as _sk
+            _p = _sk.socket()
+            _p.bind(("127.0.0.1", 0))
+            dead = _p.getsockname()[1]
+            _p.close()
+            _real_pub = tracker_replace.is_public_host
+            tracker_replace.is_public_host = lambda h: True   # 假装这是公网
+            e1 = ""
+            try:
+                tracker_replace.connect({"host": "127.0.0.1", "port": dead, "kind": "qb",
+                                         "user": "admin", "password": "secret", "scheme": "http"})
+            except Exception as e:
+                e1 = str(e)
+            check("公网 + 明文 http：不发账号密码，并说清怎么办",
+                  "明文" in e1 and "allow-insecure-http" in e1, e1[:110])
+            e2 = ""
+            try:
+                tracker_replace.connect({"host": "127.0.0.1", "port": dead, "kind": "qb",
+                                         "user": "admin", "password": "secret", "scheme": "http",
+                                         "allow_insecure_http": True})
+            except Exception as e:
+                e2 = str(e)
+            check("勾了「确认走明文」才放行（放行后是连不上，不是被拦）", "明文" not in e2, e2[:80])
+            e3 = ""
+            try:
+                tracker_replace.connect({"host": "127.0.0.1", "port": dead, "kind": "qb",
+                                         "user": "admin", "password": "secret", "scheme": "https"})
+            except Exception as e:
+                e3 = str(e)
+            check("走 https 不受这条限制（只拦明文）", "明文" not in e3, e3[:60])
+            tracker_replace.is_public_host = _real_pub
+
+            import tracker_ui as ui_mod
+            tmpconf = os.path.join(tempfile.mkdtemp(prefix="trconf"), "guiconfig.json")
+            os.makedirs(os.path.dirname(tmpconf), exist_ok=True)
+            real_conf = ui_mod.CONF
+            try:
+                ui_mod.CONF = tmpconf
+                rows = [{"name": "nas", "host": "nas.xx.com/qb", "port": 443, "scheme": "https",
+                         "user": "admin", "password": "topsecret",
+                         "proxy_user": "front", "proxy_pass": "frontpw"}]
+                ui_mod.save_conf({"instances": rows, "old": "x"})
+                raw = io.open(tmpconf, encoding="utf-8").read()
+                back = json.loads(raw).get("instances") or [{}]
+                check("默认不把密码写进 guiconfig.json",
+                      "topsecret" not in raw and not back[0].get("password"), raw[:120])
+                check("子路径/前置账号这些照旧存住",
+                      back[0]["host"] == "nas.xx.com/qb" and back[0].get("proxy_user") == "front",
+                      back[0])
+                ui_mod.save_conf({"instances": rows, "save_passwords": True})
+                raw2 = io.open(tmpconf, encoding="utf-8").read()
+                check("明确开了 save_passwords 才落盘", "topsecret" in raw2, raw2[:120])
+            finally:
+                ui_mod.CONF = real_conf
+        finally:
+            for srv in (qs, ts):
+                srv.shutdown()
+
+
+
     # ---------------- PROTO-2 协议自动探测 / 填反了自动纠正 ----------------
     if want("PROTO-2"):
         print("\nPROTO-2 协议字段：auto 自己探；填反了自己换过去；连不上不乱试")
         import contextlib
-        import io
         import socket
         crt = os.path.join(HERE, "work", "tls.crt")
         key = os.path.join(HERE, "work", "tls.key")
@@ -1179,21 +1364,31 @@ def main():
                 check("地址没填：直接说「地址没填」", sc4 is None and "地址" in note4, note4)
 
                 buf = io.StringIO()
+                inst = {"host": "127.0.0.1", "port": s1.port, "kind": "qb",
+                        "user": QB_USER, "password": QB_PW, "scheme": "auto"}
+                err = ""
                 with contextlib.redirect_stdout(buf):
-                    inst = {"host": "127.0.0.1", "port": s1.port, "kind": "qb",
-                            "user": QB_USER, "password": QB_PW, "scheme": "auto"}
-                    c = tracker_replace.connect(inst)
-                check("scheme=auto：自己探到 https 并连上",
-                      c.kind == "qb" and c.base == "https://127.0.0.1:%d" % s1.port)
+                    try:
+                        tracker_replace.connect(inst)
+                    except Exception as e:
+                        err = str(e)
+                check("自签证书不再自动免验证：说清要勾哪个框",
+                      "跳过证书校验" in err, err[:90])
                 check("探到的协议回写进实例（下次不重复探）", inst["scheme"] == "https")
-                check("自签证书自动勾上「跳过证书校验」", inst["insecure"] is True)
+                check("没勾就别擅自连：insecure 仍是 False", inst.get("insecure") is not True)
                 check("auto 会在日志里说清探到了什么", "自动探测协议" in buf.getvalue(),
                       buf.getvalue()[:120])
+                buf2 = io.StringIO()
+                with contextlib.redirect_stdout(buf2):
+                    c = tracker_replace.connect(dict(inst, insecure=True))
+                check("自己勾了「跳过证书校验」才连自签 https",
+                      c.kind == "qb" and c.base == "https://127.0.0.1:%d" % s1.port)
 
                 buf2 = io.StringIO()
                 with contextlib.redirect_stdout(buf2):
                     wrong = {"host": "127.0.0.1", "port": s1.port, "kind": "qb",
-                             "user": QB_USER, "password": QB_PW, "scheme": "http"}
+                             "user": QB_USER, "password": QB_PW, "scheme": "http",
+                             "insecure": True}      # 自签口：证书这步由用户自己勾
                     c2 = tracker_replace.connect(wrong)
                 check("协议填反（http 连 https 口）：自动改用 https 连上",
                       c2.base.startswith("https://"))
