@@ -2630,7 +2630,21 @@ def build_parser():
     return ap
 
 
+def tame_console():
+    """控制台代码页装不下的字（英文 Windows 的 cp1252 连中文都装不下）别让它崩。
+
+    只把「编码不了」改成打 ?，不改编码 —— 中文系统上照常显示中文，
+    英文系统上顶多把 ✓、― 打成 ?，总比整个程序 UnicodeEncodeError 退出强。
+    """
+    for st in (sys.stdout, sys.stderr):
+        try:
+            st.reconfigure(errors="replace")
+        except Exception:                       # 被重定向到 StringIO、或 exe 里根本没有控制台
+            pass
+
+
 def main():
+    tame_console()
     ap = build_parser()
     a = ap.parse_args()
     set_state_dir(getattr(a, "state_dir", ""))
