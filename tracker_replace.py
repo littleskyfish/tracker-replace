@@ -58,7 +58,7 @@ import binascii
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
-VERSION = "1.14"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+VERSION = "1.15"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
 
 def _base_dir():
     """程序所在目录。PyInstaller 单文件模式下 __file__ 指向退出就销毁的临时解压
@@ -394,12 +394,19 @@ class _StdClient(object):
 class QbClient:
     kind = "qb"
 
-    def __init__(self, host, port, user="", pw="", scheme="http", timeout=60, insecure=False):
+    def __init__(self, host, port, user="", pw="", scheme="http", timeout=60, insecure=False,
+                 prefix="", proxy=None):
         self.scheme = (scheme or "http").lower()
-        self.base = "%s://%s:%d" % (self.scheme, host, port)
+        pre = (prefix or "").strip().rstrip("/")
+        if pre and not pre.startswith("/"):
+            pre = "/" + pre
+        self.prefix = pre
+        self.base = "%s://%s:%d%s" % (self.scheme, host, port, pre)
         self.timeout = timeout
         self.insecure = bool(insecure)
         self.s = _StdClient(timeout=timeout, insecure=insecure)
+        if proxy:
+            self.s.auth = (proxy[0], proxy[1] or "")      # 反代前面那层 Basic，跟 WebUI 账号两码事
         r = self.s.post(self.base + "/api/v2/auth/login",
                         data={"username": user, "password": pw}, timeout=timeout)
         if r.status_code != 200 or r.text.strip() != "Ok.":
@@ -568,13 +575,20 @@ class QbClient:
 class TrClient:
     kind = "tr"
 
-    def __init__(self, host, port, user="", pw="", scheme="http", timeout=120, insecure=False):
+    def __init__(self, host, port, user="", pw="", scheme="http", timeout=120, insecure=False,
+                 prefix="", proxy=None):
         self.scheme = (scheme or "http").lower()
-        self.url = "%s://%s:%d/transmission/rpc" % (self.scheme, host, port)
+        pre = (prefix or "").strip().rstrip("/")
+        if pre and not pre.startswith("/"):
+            pre = "/" + pre
+        self.prefix = pre
+        self.url = "%s://%s:%d%s/transmission/rpc" % (self.scheme, host, port, pre)
         self.timeout = timeout
         self.insecure = bool(insecure)
         self.s = _StdClient(timeout=timeout, insecure=insecure)
-        if user:
+        if proxy:
+            self.s.auth = (proxy[0], proxy[1] or "")      # 前置 Basic 优先，没配才用 RPC 账号
+        elif user:
             self.s.auth = (user, pw)
         self.s.headers["X-Transmission-Session-Id"] = "0"
         r = self._raw("session-get", timeout=min(timeout, 90))
@@ -757,6 +771,58 @@ def http_hint(status, body="", hdrs=None):
     return ""
 
 
+ALLOW_INSECURE_HTTP = False        # --allow-insecure-http 才允许公网明文
+
+
+def split_prefix(host):
+    """地址允许写成 dom 或 dom/qb（反代把 WebUI 挂在子路径下时）。
+
+    返回 (纯主机, "/qb" 或 "")。前缀会拼在 base 后面，qB 就是 /qb/api/v2/...
+    """
+    h = (host or "").strip()
+    if "/" not in h:
+        return h, ""
+    host_, _, rest = h.partition("/")
+    pre = "/" + "/".join([p for p in rest.split("/") if p not in ("", ".")])
+    return host_.strip(), ("" if pre == "/" else pre.rstrip("/"))
+
+
+_NOT_PUBLIC_NETS = None
+
+
+def _not_public_nets():
+    """这些段不算公网：回环、RFC1918、链路本地、CGNAT、IPv6 本地/唯一本地。
+    其余（含 192.0.2/203.0.113 这类测试段）一律按公网处理，宁可拦下来。"""
+    global _NOT_PUBLIC_NETS
+    if _NOT_PUBLIC_NETS is None:
+        import ipaddress
+        _NOT_PUBLIC_NETS = [ipaddress.ip_network(x) for x in (
+            "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "0.0.0.0/8",
+            "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fc00::/7", "fe80::/10")]
+    return _NOT_PUBLIC_NETS
+
+
+def is_public_host(h):
+    """要不要按公网对待（明文 http 发不发密码就看这个）。解析不出来的按公网算。"""
+    import ipaddress
+    import socket
+    h = (h or "").strip().strip("[]")
+    if not h or h.lower() == "localhost" or h.endswith((".local", ".test", ".lan", ".internal")):
+        return False
+    try:
+        ips = [ipaddress.ip_address(h)]
+    except ValueError:
+        if "." not in h:
+            return False                        # 单机名（nas、qb）肯定是内网
+        try:
+            ips = [ipaddress.ip_address(x[4][0]) for x in socket.getaddrinfo(h, None)]
+        except OSError:
+            return True                         # 域名解析不了：按公网算
+        if not ips:
+            return True
+    return not any(ip in net for ip in ips for net in _not_public_nets())
+
+
 def looks_like_proto_mismatch(msg):
     m = (msg or "").lower()
     if any(k in m for k in DEAD_MARKS):
@@ -836,8 +902,7 @@ def resolve_scheme(inst, quiet=False):
             log("ℹ %s:%s 协议探测失败（%s），先按 http 试" % (host, port, note))
         return "http"
     inst["scheme"] = scheme
-    if scheme == "https" and not trusted:
-        inst["insecure"] = True
+    inst["_untrusted"] = bool(scheme == "https" and not trusted)
     if not quiet:
         log("ℹ %s:%s 自动探测协议 → %s：%s" % (host, port, scheme, note))
     return scheme
@@ -847,20 +912,38 @@ def connect(inst):
     """自动识别：先当 qB 试，不行再当 TR 试。协议填反了会自己换过去再试一次。"""
     kind = inst.get("kind")
     order = [kind] if kind in CLIENTS else ["qb", "tr"]
+    host, pre = split_prefix(inst["host"])
+    prefix = str(inst.get("prefix") or "").strip() or pre    # 显式写的 prefix 优先
+    if prefix and not prefix.startswith("/"):
+        prefix = "/" + prefix
+    prefix = prefix.rstrip("/")
+    inst["host"], inst["prefix"] = host, prefix       # 顺手规整回配置里
+    pu = str(inst.get("proxy_user") or "").strip()
+    proxy = (pu, inst.get("proxy_pass")
+             or os.environ.get("TRREPLACE_PROXY_PASSWORD", "")) if pu else None
+    user = inst.get("user", "")
+    pw = inst.get("password") or os.environ.get("TRREPLACE_PASSWORD", "")
     scheme0 = resolve_scheme(inst)
     ins0 = bool(inst.get("insecure"))
+    if (scheme0 == "http" and (user or pw) and proxy is None
+            and not (ALLOW_INSECURE_HTTP or inst.get("allow_insecure_http"))
+            and is_public_host(host)):
+        raise RuntimeError(
+            "公网地址 + 明文 http，账号密码会在路上被人看到，这份我不发："
+            "域名有 https 就把协议改成 https（或选「自动」）；确实只能明文，"
+            "就勾「确认走明文 HTTP」/命令行加 --allow-insecure-http")
+    if scheme0 == "https" and inst.get("_untrusted") and not ins0:
+        raise RuntimeError("这个 https 的证书不受信（多半自签）：要连就勾「跳过证书校验」"
+                           "/命令行加 --insecure —— 不替你默认放弃验证")
     attempts = [(scheme0, ins0)]
-    if scheme0 == "http":                   # 填反了最常见的方向：其实是 https
-        attempts += [("https", False), ("https", True)]    # 先正规校验，自签再退一步
-    else:
-        attempts += [("http", False)]
+    # 填反了最常见的方向：http↔https；证书校验按用户自己的勾选，不擅自放宽
+    attempts.append(("https" if scheme0 == "http" else "http", ins0))
     last = None
     for k in order:
         for si, (sc, ins) in enumerate(attempts):
             try:
-                c = CLIENTS[k](inst["host"], inst["port"], inst.get("user", ""),
-                               inst.get("password") or os.environ.get("TRREPLACE_PASSWORD", ""),
-                               sc, insecure=ins)
+                c = CLIENTS[k](host, inst["port"], user, pw, sc, insecure=ins,
+                               prefix=prefix, proxy=proxy)
             except Exception as e:
                 last = e
                 if si == 0 and not looks_like_proto_mismatch(str(e)):
@@ -1530,12 +1613,17 @@ def load_instances(a):
                   "kind": a.kind or "", "user": a.user or "",
                   "scheme": getattr(a, "scheme", None) or "auto",
                   "insecure": bool(getattr(a, "insecure", False)),
+                  "proxy_user": getattr(a, "proxy_user", "") or "",
+                  "proxy_pass": getattr(a, "proxy_pass", "")
+                  or os.environ.get("TRREPLACE_PROXY_PASSWORD", ""),
+                  "allow_insecure_http": bool(ALLOW_INSECURE_HTTP),
                   "password": a.password or os.environ.get("TRREPLACE_PASSWORD", "")}]
     else:
         die("要指定实例：--config config.json 或 --host/--port/--user/--password")
     for i in insts:
         i.setdefault("label", "%s:%s" % (i.get("host"), i.get("port")))
-        i.setdefault("password", os.environ.get("TRREPLACE_PASSWORD", ""))
+        if not i.get("password"):            # 配置里没存密码时用环境变量（默认不落盘）
+            i["password"] = os.environ.get("TRREPLACE_PASSWORD", "")
         s = str(i.get("scheme") or "auto").lower().rstrip(":/")
         if s in ("", "detect"):
             s = "auto"
@@ -2563,6 +2651,12 @@ def build_parser():
     ap.add_argument("--port", type=int)
     ap.add_argument("--user", default="")
     ap.add_argument("--password", default="", help="留空则读环境变量 TRREPLACE_PASSWORD")
+    ap.add_argument("--proxy-user", default="",
+                    help="反代前面那层 Basic 认证的用户名（跟 WebUI 账号是两套）")
+    ap.add_argument("--proxy-pass", default="",
+                    help="前置 Basic 的密码，留空读环境变量 TRREPLACE_PROXY_PASSWORD")
+    ap.add_argument("--allow-insecure-http", action="store_true",
+                    help="允许往公网地址发明文 http（里面带账号密码，默认不给发）")
     ap.add_argument("--kind", choices=["qb", "tr"], help="跳过自动识别")
     ap.add_argument("--scheme", choices=["http", "https", "auto"], default="auto",
                     help="WebUI/RPC 协议。默认 auto＝自己探一下这个端口说的是 http 还是 "
@@ -2647,6 +2741,8 @@ def main():
     tame_console()
     ap = build_parser()
     a = ap.parse_args()
+    global ALLOW_INSECURE_HTTP
+    ALLOW_INSECURE_HTTP = bool(getattr(a, "allow_insecure_http", False))
     set_state_dir(getattr(a, "state_dir", ""))
     os.makedirs(ST_DIR, exist_ok=True)
     for d in getattr(a, "pick_state", []) or []:
