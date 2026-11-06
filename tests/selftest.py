@@ -1535,6 +1535,43 @@ def main():
             s400.stop()
             s401.stop()
 
+    # ---------------- CONSOLE-1 窄控制台不崩 ----------------
+    if want("CONSOLE-1"):
+        print("\nCONSOLE-1 控制台代码页装不下中文时（英文 Windows）打印不能崩")
+        import contextlib
+        import io as _io
+
+        buf = _io.BytesIO()
+        narrow = _io.TextIOWrapper(buf, encoding="ascii", errors="strict",
+                                   line_buffering=True)
+        try:
+            with contextlib.redirect_stdout(narrow):
+                tracker_replace.tame_console()
+                tracker_replace.log("中文种子 ✓ 通过 ――― 分隔线")
+                narrow.flush()
+            got = buf.getvalue().decode("ascii", "replace")
+            crash = ""
+        except UnicodeEncodeError as e:
+            got, crash = "", str(e)
+        check("窄控制台上打中文/勾号不崩", not crash, crash[:80])
+        check("窄控制台上仍然有输出（打成问号也行）", bool(got.strip()), got[:60])
+
+        env = dict(os.environ, PYTHONIOENCODING="ascii")
+        r = subprocess.run([sys.executable, "tracker_replace.py", "-V"], cwd=ROOT,
+                           capture_output=True, text=True, env=env, timeout=60)
+        check("-V 在窄控制台能正常退出", r.returncode == 0,
+              (r.stderr or "")[-120:])
+        check("-V 在窄控制台也把版本号打出来了", "1." in (r.stdout + r.stderr),
+              repr((r.stdout or "")[:40]))
+        r2 = subprocess.run([sys.executable, "tracker_replace.py", "doctor", "--host",
+                             "127.0.0.1", "--port", "1", "--old", "x"], cwd=ROOT,
+                            capture_output=True, text=True, env=env, timeout=90)
+        check("连不上时的中文报错在窄控制台也不崩",
+              "UnicodeEncodeError" not in (r2.stderr or ""),
+              (r2.stdout or "")[-100:] + (r2.stderr or "")[-100:])
+        check("连不上时确实打了东西（不是空退出）",
+              bool((r2.stdout + r2.stderr).strip()), "rc=%s" % r2.returncode)
+
     # ---------------- 汇总 ----------------
     bad = [r for r in RESULTS if not r[1]]
     print("\n" + "=" * 62)
