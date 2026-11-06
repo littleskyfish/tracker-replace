@@ -58,7 +58,7 @@ import binascii
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
-VERSION = "1.13"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+VERSION = "1.14"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
 
 def _base_dir():
     """程序所在目录。PyInstaller 单文件模式下 __file__ 指向退出就销毁的临时解压
@@ -403,8 +403,10 @@ class QbClient:
         r = self.s.post(self.base + "/api/v2/auth/login",
                         data={"username": user, "password": pw}, timeout=timeout)
         if r.status_code != 200 or r.text.strip() != "Ok.":
-            raise RuntimeError("qB 登录失败 HTTP %s（若 403 请检查 WebUI 白名单/CSRF）"
-                               % r.status_code)
+            hint = http_hint(r.status_code, r.text, r.headers)
+            raise RuntimeError("qB 登录失败 HTTP %s：%s" % (
+                r.status_code,
+                hint or "若 403 请检查 WebUI 白名单/CSRF；正文：%s" % " ".join(r.text.split())[:80]))
         self.api = self._get("/api/v2/app/webapiVersion")
         self.version = self._get("/api/v2/app/version")
         # skip_checking 自 qB 3.3.13(2017) 起就有；v5.3.0 已知会忽略该参数
@@ -592,9 +594,13 @@ class TrClient:
                 r.headers.get("X-Transmission-Session-Id", "")
                 continue
             if r.status_code == 401:
-                raise RuntimeError("TR 认证失败(401)")
+                raise RuntimeError("TR 认证失败(401)：%s"
+                                   % (http_hint(401, r.text, r.headers) or "账号或密码不对"))
             if r.status_code != 200:
-                raise RuntimeError("TR HTTP %s" % r.status_code)
+                raise RuntimeError("TR HTTP %s：%s" % (
+                    r.status_code,
+                    http_hint(r.status_code, r.text, r.headers)
+                    or " ".join(r.text.split())[:80]))
             j = r.json()
             if j.get("result") not in ("success", None, ""):
                 raise RuntimeError("%s: %s" % (method, j.get("result")))
@@ -716,13 +722,39 @@ CLIENTS = {"qb": QbClient, "tr": TrClient}
 # 报错里出现这些字样，基本就是「协议填反了」（http 连 https 口 / https 连 http 口）
 # 或对端证书问题，值得再拿另一个协议试一次；纯连不上（超时、拒连、DNS）不在此列，
 # 换了协议也是白等，直接失败。
-PROTO_MARKS = ("ssl", "handshake", "wrong version number", "unknown protocol",
+PROTO_MARKS = ("说的是 https", "plain http request",
+               "ssl", "handshake", "wrong version number", "unknown protocol",
                "badstatusline", "bad request version", "unexpected_eof",
                "plaintext", "get requests not supported", "certificate",
                "reset by peer", "connection aborted", "10054", "shut down")
 # 这些是没连上（地址/端口/网络问题），不是协议问题
 DEAD_MARKS = ("refused", "timed out", "timeout", "unreachable", "name or service",
               "no route to host", "unknown host", "network is unreachable")
+
+
+def http_hint(status, body="", hdrs=None):
+    """网关/反代回的那些码，翻译成人话（返回空串表示没 insight）。"""
+    b = " ".join((body or "")[:200].split())
+    low = b.lower()
+    st = status or 0
+    if st == 400 and "plain http request" in low:
+        return ("这个端口说的是 https，你填的是 http —— 协议选「自动」或直接改成 https")
+    if st == 401:
+        wa = ""
+        try:
+            wa = (hdrs.get("WWW-Authenticate") if hdrs is not None else "") or ""
+        except Exception:
+            wa = ""
+        if "basic" in wa.lower():
+            return ("这个域名前面还挡了一层 Basic 认证（401）：需要的是前置账号密码，"
+                    "不是 qB/TR 的 WebUI 账号")
+        return "账号或密码不对（401）"
+    if st == 403:
+        return ("被拒（403）：常见是 WebUI 的 IP 白名单/CSRF 限制，或前置防火墙挡了")
+    if st == 404:
+        return ("路径不对（404）：域名把 WebUI 挂在子路径下了（比如 https://xx/qb/），"
+                "当前版本还不支持子路径")
+    return ""
 
 
 def looks_like_proto_mismatch(msg):
