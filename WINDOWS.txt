@@ -1,11 +1,19 @@
 tracker替换 —— Windows 用法
 
+A0. 下 exe（这台电脑没装 Python 就用这个）
+   Release 里下 tracker-replace-<版本>-win64.exe，双击 -> 浏览器开一个窗口，跟网页版一样
+   要在命令行敲 doctor/apply 就用 tracker-replace-<版本>-win64-cli.exe，如：
+       tracker-replace-1.14-win64-cli.exe doctor --old old-tracker.example
+   （台账、guiconfig.json、state\ 都落在 exe 旁边，拷走 exe 记得把 state\ 一起带走）
+
 A. 直接跑（装了 Python 3.7+）
    双击 tracker-replace-gui.bat  -> 原生窗口
    双击 tracker-replace-ui.bat   -> 浏览器标签页当窗口（只监听 127.0.0.1）
 
-B. 打成单文件 tracker-replace.exe（打一次，之后 exe 可拷去任何 Windows）
-   双击 build_windows.bat，跑完在 dist\tracker-replace.exe
+B. 自己打成 exe（打一次，之后拷去任何 Windows）
+   双击 build_windows.bat，跑完在 dist\ 里：
+       tracker-replace.exe      双击开窗口
+       tracker-replace-cli.exe  命令行用
 
-命令行： dist\tracker-replace.exe doctor --old old-tracker.example
+命令行： dist\tracker-replace-cli.exe doctor --old old-tracker.example
 自检：   python tests\selftest.py
