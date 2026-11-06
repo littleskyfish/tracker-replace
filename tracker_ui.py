@@ -61,6 +61,19 @@ def load_conf():
 
 
 def save_conf(c):
+    """存 guiconfig.json。默认不往里写密码 —— 这个文件夹经常被整包压缩发人求助，
+    密码就跟着跑了。要存的话在 guiconfig.json 里写 "save_passwords": true（风险自担）；
+    不存就每次在实例里输一次，或用环境变量 TRREPLACE_PASSWORD。"""
+    c = dict(c)
+    if not c.get("save_passwords"):
+        keep = ("password", "proxy_pass")
+        rows = []
+        for i in (c.get("instances") or []):
+            i = dict(i)
+            for k in keep:
+                i.pop(k, None)
+            rows.append(i)
+        c["instances"] = rows
     try:
         json.dump(c, open(CONF, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         try:
@@ -86,6 +99,9 @@ def write_client_config(instances):
              "user": i.get("user") or "", "password": i.get("password") or ""}
         if i.get("kind"):
             r["kind"] = i["kind"]
+        for k in ("prefix", "proxy_user", "proxy_pass", "allow_insecure_http"):
+            if i.get(k) not in (None, "", False):
+                r[k] = i[k]
         rows.append(r)
     with open(p, "w", encoding="utf-8") as fh:
         json.dump({"instances": rows}, fh, ensure_ascii=False, indent=1)
@@ -206,8 +222,31 @@ class Engine(object):
         finally:
             tracker_replace.set_logger(None)
             tracker_replace.STOP_CHECK = lambda: False
+            scrub_client_config()
             self.busy = False
             sink("―――― 这一步用了 %.0f 秒 ――――" % (time.time() - t0))
+
+
+def scrub_client_config():
+    """clients.json 里的密码只在跑的时候需要，跑完抹掉（下次任务从内存里重新写）。"""
+    p = os.path.join(tracker_replace.HERE, "clients.json")
+    try:
+        cfg = json.load(open(p, encoding="utf-8"))
+    except Exception:
+        return
+    ch = False
+    for r in (cfg.get("instances") or []):
+        for k in ("password", "proxy_pass"):
+            if r.get(k):
+                r[k] = ""
+                ch = True
+    if not ch:
+        return
+    try:
+        json.dump(cfg, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        os.chmod(p, 0o600)
+    except Exception:
+        pass
 
 
 class _Writer(object):
@@ -307,7 +346,8 @@ def run_tk(conf, selftest=None):
 
     def do_probe(g, ins, hint):
         """探一下这个地址端口说 http 还是 https，结果直接填回协议/证书勾选。"""
-        host, port = g["host"].get().strip(), g["port"].get().strip()
+        host, port = tracker_replace.split_prefix(g["host"].get().strip())[0], \
+            g["port"].get().strip()
         if not host or not port:
             hint.config(text="先填地址和端口，才能探协议")
             return
@@ -321,16 +361,18 @@ def run_tk(conf, selftest=None):
                 hint.config(text="没探到：" + note)
                 return
             g["proto"].set(sc)
-            if sc == "https" and not trusted:
-                ins.set(True)
-            hint.config(text="探到了 %s:%s → %s（%s）" % (host, port, sc, note))
+            hint.config(text="探到了 %s:%s → %s（%s）%s" % (
+                host, port, sc, note,
+                "" if (sc != "https" or trusted)
+                else "；证书不受信（多半自签），要连得自己勾「跳过证书校验」"
+                "——工具不替你默认放弃验证"))
         hint.config(text="正在探测…")
         threading.Thread(target=work, daemon=True).start()
 
     def edit(title, src=None, on_ok=None):
         d = tk.Toplevel(root)
         d.title(title)
-        d.geometry("400x280")
+        d.geometry("420x346")
         d.transient(root)
         g = {"proto": tk.StringVar(value=(src or {}).get("scheme") or "http"),
              "kind": tk.StringVar(value=(src or {}).get("kind", "")),
@@ -338,8 +380,11 @@ def run_tk(conf, selftest=None):
              "host": tk.StringVar(value=(src or {}).get("host", "")),
              "port": tk.StringVar(value=str((src or {}).get("port", ""))),
              "user": tk.StringVar(value=(src or {}).get("user", "")),
-             "pw": tk.StringVar(value=(src or {}).get("password", ""))}
+             "pw": tk.StringVar(value=(src or {}).get("password", "")),
+             "pu": tk.StringVar(value=(src or {}).get("proxy_user", "")),
+             "ppp": tk.StringVar(value=(src or {}).get("proxy_pass", ""))}
         ins = tk.BooleanVar(value=bool((src or {}).get("insecure")))
+        plain = tk.BooleanVar(value=bool((src or {}).get("allow_insecure_http")))
         rowi = 0
         ttk.Label(d, text="协议").grid(row=rowi, column=0, sticky="w", padx=8, pady=3)
         ttk.Combobox(d, textvariable=g["proto"], values=("auto", "http", "https"),
@@ -347,24 +392,31 @@ def run_tk(conf, selftest=None):
                                                      padx=8, pady=3)
         ttk.Checkbutton(d, text="跳过证书校验(自签)", variable=ins).grid(
             row=rowi, column=2, sticky="w", padx=4)
+        ttk.Checkbutton(d, text="确认走明文HTTP", variable=plain).grid(
+            row=rowi, column=3, sticky="w", padx=2)
         ttk.Button(d, text="探协议", width=7,
                    command=lambda: do_probe(g, ins, hint)).grid(
             row=rowi, column=3, sticky="e", padx=8)
         rowi += 1
-        hint = ttk.Label(d, foreground="#666",
-                         text="协议选 auto：连之前自己探（HTTPS/自签证书都会说清）")
+        hint = ttk.Label(d, foreground="#666", wraplength=400, justify="left",
+                         text="协议选 auto：连之前自己探；公网地址 + 明文 http 默认不发账号密码")
         hint.grid(row=rowi, column=0, columnspan=4, sticky="w", padx=8)
         rowi += 1
         for key, label, show in (("kind", "类型(留空=自动识别)", ""),
                                  ("name", "备注名", ""),
-                                 ("host", "地址(域名或IP)", ""), ("port", "端口", ""),
-                                 ("user", "用户名", ""), ("pw", "密码", "*")):
+                                 ("host", "地址(域名/IP/带子路径)", ""),
+                                 ("port", "端口", ""),
+                                 ("user", "用户名", ""), ("pw", "密码", "*"),
+                                 ("pu", "前置账号(反代)", ""),
+                                 ("ppp", "前置密码", "*")):
             ttk.Label(d, text=label).grid(row=rowi, column=0, sticky="w", padx=8, pady=3)
             ttk.Entry(d, textvariable=g[key], show=show, width=28).grid(
                 row=rowi, column=1, sticky="ew", padx=8, pady=3)
             rowi += 1
-        ttk.Label(d, text="密码存在本机 guiconfig.json（0600）", foreground="#666").grid(
-            row=rowi, column=0, columnspan=2, sticky="w", padx=8)
+        ttk.Label(d, foreground="#666", wraplength=400, justify="left",
+                  text="密码默认不存盘（要存在 guiconfig.json 里写 save_passwords）；"
+                       "前置账号是反代那层 Basic，跟下载器账号不是一套").grid(
+            row=rowi, column=0, columnspan=4, sticky="w", padx=8)
 
         def ok(_e=None):
             if not g["host"].get().strip() or not g["port"].get().strip():
@@ -374,7 +426,9 @@ def run_tk(conf, selftest=None):
                    "scheme": g["proto"].get().strip() or "http",
                    "insecure": bool(ins.get()),
                    "host": g["host"].get().strip(), "port": int(g["port"].get().strip()),
-                   "user": g["user"].get().strip(), "password": g["pw"].get()}
+                   "user": g["user"].get().strip(), "password": g["pw"].get(),
+                   "proxy_user": g["pu"].get().strip(), "proxy_pass": g["ppp"].get(),
+                   "allow_insecure_http": bool(plain.get())}
             d.destroy()
             on_ok(obj)
 
@@ -724,14 +778,19 @@ PAGE = r"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
    <select id="proto"><option value="auto">\u534f\u8bae\uff1a\u81ea\u52a8</option><option value="http">http</option><option value="https">https</option></select>
    <select id="kind"><option value="">\u81ea\u52a8\u8bc6\u522b</option><option value="qb">qBittorrent</option>
    <option value="tr">Transmission</option></select>
-   <input id="host" placeholder="\u5730\u5740(\u57df\u540d\u6216IP)" size="14" onchange="probeProto()"><input id="port" placeholder="\u7aef\u53e3" size="6" onchange="probeProto()">
+   <input id="host" placeholder="\u5730\u5740(\u57df\u540d/IP/\u5e26\u5b50\u8def\u5f84)" size="16" onchange="probeProto()"><input id="port" placeholder="\u7aef\u53e3" size="6" onchange="probeProto()">
    <input id="user" placeholder="\u7528\u6237\u540d" size="10"><input id="pw" placeholder="\u5bc6\u7801" size="12" type="password">
    <label class="hint"><input type="checkbox" id="insec">\u8df3\u8fc7\u8bc1\u4e66\u6821\u9a8c</label>
    <button class="btn b4" onclick="addInst()">\u6dfb\u52a0</button>
    <button class="btn b4" style="background:#0ea5e9" onclick="probeProto()">\u63a2\u534f\u8bae</button>
   </div>
+  <div class="row" style="margin:0 0 6px">
+   <input id="pu" placeholder="\u524d\u7f6e\u8d26\u53f7(\u53cd\u4ee3 Basic)" size="14">
+   <input id="ppp" placeholder="\u524d\u7f6e\u5bc6\u7801" size="14" type="password">
+   <label class="hint"><input type="checkbox" id="plain">\u786e\u8ba4\u8d70\u660e\u6587 HTTP</label>
+  </div>
   <div class="row" style="margin:0 0 6px"><span class="hint" id="protohint">\u534f\u8bae\u9009\u300c\u81ea\u52a8\u300d\uff1a\u586b\u5b8c\u5730\u5740\u7aef\u53e3\u5c31\u81ea\u5df1\u63a2\uff08HTTPS/\u81ea\u7b7e\u8bc1\u4e66\u90fd\u4f1a\u8bf4\u6e05\uff09</span></div>
-  <div class="hint">\u9009\u4e2d\u67d0\u884c\u53ef\u5220\u9664\u3002\u914d\u7f6e\u5b58\u5728\u672c\u673a guiconfig.json\uff08\u6743\u9650 0600\uff09\u3002</div>
+  <div class="hint">\u5730\u5740\u53ef\u5199\u5b50\u8def\u5f84\uff08\u5982 nas.xx.com/qb\uff09\u3002\u9009\u4e2d\u67d0\u884c\u53ef\u5220\u9664\u3002\u5bc6\u7801\u9ed8\u8ba4\u4e0d\u5199\u8fdb guiconfig.json\uff0c\u6bcf\u6b21\u6253\u5f00\u8f93\u4e00\u6b21\u3002</div>
  </div>
  <div class="card r">
   <h3>\u4efb\u52a1</h3>
@@ -791,8 +850,7 @@ async function probeProto(){const h=host.value.trim(),p=parseInt(port.value||0);
  el.textContent='\u6b63\u5728\u63a2\u6d4b '+h+':'+p+'\u2026';
  let r={};try{r=await api('/api/probe',{host:h,port:p});}catch(e){r={err:''+e};}
  if(r.scheme){el.textContent='\u2713 '+h+':'+p+' \u2192 '+r.scheme+'\uff08'+r.note+'\uff09';
-  if(r.scheme==='https'&&!r.trusted){document.getElementById('insec').checked=true;
-   el.textContent+='\uff0c\u5df2\u81ea\u52a8\u52fe\u4e0a\u8df3\u8fc7\u8bc1\u4e66\u6821\u9a8c';}
+  if(r.scheme==='https'&&!r.trusted){el.textContent+='\uff0c\u8bc1\u4e66\u4e0d\u53d7\u4fe1\uff08\u591a\u534a\u81ea\u7b7e\uff09\uff1a\u8981\u8fde\u5c31\u52fe\u300c\u8df3\u8fc7\u8bc1\u4e66\u6821\u9a8c\u300d';}
   return r;}
  el.textContent='\u26a0 '+(r.err||'\u6ca1\u63a2\u5230\u534f\u8bae');return null;}
 async function addInst(){const h=host.value.trim(),p=parseInt(port.value||0);
@@ -800,12 +858,25 @@ async function addInst(){const h=host.value.trim(),p=parseInt(port.value||0);
  if(!/^https?:\/\//.test(h) && /:\/\//.test(h)){alert('\u5730\u5740\u53ea\u586b\u57df\u540d\u6216IP\uff0c\u534f\u8bae\u7528\u5de6\u8fb9\u4e0b\u62c9\u6846');return;}
  let sc=proto.value,insec=document.getElementById('insec').checked;
  if(sc==='auto'){const r=await probeProto();sc=r?r.scheme:'http';
-  if(r&&r.scheme==='https'&&!r.trusted)insec=true;}
+  if(r&&r.scheme==='https'&&!r.trusted){
+   document.getElementById('protohint').textContent='\u8fd9\u4e2a https \u7684\u8bc1\u4e66\u4e0d\u53d7\u4fe1\uff08\u591a\u534a\u81ea\u7b7e\uff09\uff1a\u8981\u8fde\u5c31\u52fe\u300c\u8df3\u8fc7\u8bc1\u4e66\u6821\u9a8c\u300d';}}
+ if(sc==='http'&&looksPublic(h)&&!document.getElementById('plain').checked)
+  alert('\u516c\u7f51\u5730\u5740\u8d70\u660e\u6587 http \u4f1a\u628a\u5e10\u53f7\u5bc6\u7801\u9732\u5728\u8def\u4e0a\uff1a\u80fd https \u5c31\u6539 https\uff0c\u786e\u5b9e\u53ea\u80fd\u660e\u6587\u5c31\u52fe\u300c\u786e\u8ba4\u8d70\u660e\u6587 HTTP\u300d');
  S.instances.push({scheme:sc,kind:kind.value,host:h.replace(/^\w+:\/\//,'').replace(/\/+$/,''),
    port:p,insecure:insec,
-   user:user.value.trim(),password:pw.value});
+   user:user.value.trim(),password:pw.value,
+   proxy_user:document.getElementById('pu').value.trim(),
+   proxy_pass:document.getElementById('ppp').value,
+   allow_insecure_http:document.getElementById('plain').checked});
  api('/api/save',{instances:S.instances});render();}
 function del(i){S.instances.splice(i,1);api('/api/save',{instances:S.instances});render();}
+function looksPublic(x){
+ x=String(x||'').replace(/\/+.*$/,'');
+ if(/^(10\.|192\.168\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(x))return false;
+ if(/^\d+\.\d+\.\d+\.\d+$/.test(x))return true;
+ if(!/\./.test(x))return false;
+ if(/\.(local|test|lan|internal|home)$/i.test(x))return false;
+ return /\.[a-z]{2,}$/i.test(x);}
 function form(){return{old:old.value,new_url:new_url.value,tdir:tdir.value,only:only.value,
  limit:limit.value,budget:budget.value,poll:poll.value,sleep:sleep.value,maxfail:maxfail.value,
  hash:hash.value,seed:seed.checked,nocap:nocap.checked,
@@ -1101,8 +1172,8 @@ def run_web(conf, port, open_browser=True, host="127.0.0.1", user=None, pw=None)
                                    "tdir": rep.get("tdir", ""),
                                    "instances": state["conf"].get("instances", [])})
             if self.path == "/api/probe":
-                sc, note, trusted = tracker_replace.probe_scheme(
-                    b.get("host", ""), b.get("port", 0))
+                ph, _pre = tracker_replace.split_prefix(b.get("host", ""))
+                sc, note, trusted = tracker_replace.probe_scheme(ph, b.get("port", 0))
                 if not sc:
                     return self._json({"err": note})
                 return self._json({"scheme": sc, "note": note, "trusted": trusted})
