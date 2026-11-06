@@ -1,0 +1,93 @@
+name: 打 Windows 包
+
+# exe 只能在 Windows 上打（PyInstaller 不支持交叉编译），所以放 CI 上打。
+# 打 tag（v*）自动跑；也可以手动触发，填 tag 就补打某个版本的包。
+# 产物：双击出窗口的 exe + 命令行 exe，传到自己 Release 的资产里。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 从哪个 tag 打（留空用当前分支）
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 工具本身只用标准库，这里只装打包器
+      - name: 装 PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: 打两个 exe
+        shell: pwsh
+        run: |
+          $ver = python -c "import tracker_replace as t; print(t.VERSION)"
+          # 不用 Out-File -Encoding utf8：PowerShell 会塞 BOM，GITHUB_ENV 就认不出来了
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "VERSION=$ver`n")
+          # 双击出窗口（网页窗口，不开黑框）
+          python -m PyInstaller --onefile --clean --noupx --noconsole `
+            --name "tracker-replace-$ver-win64" `
+            --hidden-import tracker_ui --hidden-import tkinter `
+            --hidden-import tkinter.ttk --hidden-import tkinter.filedialog `
+            --hidden-import tkinter.messagebox --hidden-import tkinter.scrolledtext `
+            gui_entry.py
+          # 命令行版：doctor/apply 那些要看输出的
+          python -m PyInstaller --onefile --clean --noupx `
+            --name "tracker-replace-$ver-win64-cli" `
+            --hidden-import tracker_ui tracker_replace.py
+          Get-ChildItem dist
+
+      - name: 冒烟（能跑起来、版本号对）
+        shell: pwsh
+        run: |
+          $out = & ".\dist\tracker-replace-$env:VERSION-win64-cli.exe" -V
+          "回显：$out"
+          if ($out -notmatch [regex]::Escape($env:VERSION)) { throw "版本号对不上：$out" }
+          foreach ($f in @("tracker-replace-$env:VERSION-win64.exe",
+                           "tracker-replace-$env:VERSION-win64-cli.exe")) {
+            $sz = (Get-Item ".\dist\$f").Length
+            "  $f = $sz 字节"
+            if ($sz -lt 3MB) { throw "$f 小得不正常（$sz 字节）" }
+          }
+
+      - name: 存一份到 Actions 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracker-replace-${{ env.VERSION }}-win64
+          path: dist/*.exe
+          if-no-files-found: error
+
+      # Release 由发版脚本建，可能比这里慢半拍，所以等一下再传
+      - name: 传到 Release
+        if: ${{ github.ref_type == 'tag' || inputs.tag != '' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+        run: |
+          $ok = $false
+          for ($i = 1; $i -le 30; $i++) {
+            gh release view $env:TAG 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            "第 $i 次：Release $env:TAG 还没建，等 20 秒"
+            Start-Sleep -Seconds 20
+          }
+          if (-not $ok) { throw "等了 10 分钟还是没有 Release $env:TAG" }
+          gh release upload $env:TAG "dist/tracker-replace-$env:VERSION-win64.exe" `
+            "dist/tracker-replace-$env:VERSION-win64-cli.exe" --clobber
+          gh release view $env:TAG
