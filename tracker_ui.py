@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""tracker_replace 的窗口界面 —— 两种，随你挑：
+"""tracker_replace 的窗口界面 —— 两种，随你挑（逻辑与命令都在 tracker_replace.py，这里只管界面）：
 
     python3 tracker_replace.py gui      原生窗口（tkinter）。Linux 单文件版、装了 Python 的 Windows 可用
     python3 tracker_replace.py ui       本地网页窗口（自动开浏览器，只监听 127.0.0.1）
