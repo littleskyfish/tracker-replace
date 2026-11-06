@@ -18,9 +18,9 @@ editTracker / TR setTrackers），不删种子、不暂停、零等待；并包�
 
 | 方式 | 适合 |
 |---|---|
-| Docker 镜像 `ghcr.io/littleskyfish/tracker-replace:1.12` | NAS / 常开服务器（下面现成命令） |
-| [Releases 下载](../../releases/latest) `tracker-replace-1.12-linux64` | Linux 服务器，`chmod +x` 直接跑 |
-| Releases 的 `tracker-replace-1.12-src.zip` 或 `git clone` | Windows / macOS / 有 Python 的机器；要 exe 在 Windows 上双击 `build_windows.bat` 打一次 |
+| Docker 镜像 `ghcr.io/littleskyfish/tracker-replace:1.13` | NAS / 常开服务器（下面现成命令） |
+| [Releases 下载](../../releases/latest) `tracker-replace-1.13-linux64` | Linux 服务器，`chmod +x` 直接跑 |
+| Releases 的 `tracker-replace-1.13-src.zip` 或 `git clone` | Windows / macOS / 有 Python 的机器；要 exe 在 Windows 上双击 `build_windows.bat` 打一次 |
 
 ---
 
@@ -33,7 +33,7 @@ docker run -d --name tracker-replace \
   -e TR_UI_USER=admin \
   -e TR_UI_PASS='自己定一个强密码' \
   --restart unless-stopped \
-  ghcr.io/littleskyfish/tracker-replace:1.12
+  ghcr.io/littleskyfish/tracker-replace:1.13
 ```
 
 浏览器打开 `http://NAS的IP:8642/`，输账号密码登录。不设 `TR_UI_PASS` 则每次启动随机生成（`docker logs tracker-replace` 查看）。仓库自带 `docker-compose.yml`，改密码/端口/路径都有注释。镜像双架构（amd64 / arm64），群晖、绿联、树莓派都能直接拉。
@@ -57,7 +57,7 @@ python3 tracker_replace.py ui    # 网页窗口，只监听 127.0.0.1，无需�
 
 Windows 双击 `tracker-replace-gui.bat` / `tracker-replace-ui.bat`；macOS 双击对应 `.command`（先 `chmod +x *.command`，第一次右键→打开）。
 
-加实例一栏从上到下：协议（WebUI 开了 TLS/反代就选 https，自签证书才勾"跳过证书校验"）、类型（留空=自动识别）、地址、端口、用户名、密码。操作顺序：**加实例 → ① 体检 → ② 演练 → 勾确认 → ③ 真执行 → 台账**。
+加实例一栏从上到下：协议（默认「**自动**」：地址端口填完自己探是 http 还是 https，探到 https 且证书自签会顺手勾上"跳过证书校验"并把探测结果写在旁边；也可以手选 http/https。填反了也不要紧，连的时候会自动换过去再试一次，并在日志里告诉你实际是哪个）、类型（留空=自动识别）、地址、端口、用户名、密码。操作顺序：**加实例 → ① 体检 → ② 演练 → 勾"我已确认，可以动真格" → ③ 真执行 → 台账**（不勾确认，③ 只会把确认框闪红提醒，绝不动手）。
 
 命令行等价：
 
@@ -109,7 +109,7 @@ python3 tracker_replace.py status                                              #
 | `import` | `import --from <旧版文件夹>` 把旧版备份/实例/台账并进新版（只复制不挪动，同名不覆盖，实例去重） |
 | `report` | 指出逐条结果 CSV 位置 |
 
-常用参数：`--old`（**必给**，旧 tracker 匹配子串）、`--torrents-dir`（按 info hash 精确配对，与文件名无关）、`--scheme https` / `--insecure`、`--kind qb|tr`、`--new-url`（不给新种子文件只给 announce）、`--only/--limit`（挑几个试）、`--pause`、`--check-budget`（TR 校验预算，默认 1800s）、`--max-fail`（连败收工，默认 5）。
+常用参数：`--old`（**必给**，旧 tracker 匹配子串）、`--torrents-dir`（按 info hash 精确配对，与文件名无关）、`--scheme`（默认 `auto`：自己探这个端口说的是 http 还是 https，探不到按 http；想固定就写 `--scheme https`）/ `--insecure`、`--kind qb|tr`、`--new-url`（不给新种子文件只给 announce）、`--only/--limit`（挑几个试）、`--pause`、`--check-budget`（TR 校验预算，默认 1800s）、`--max-fail`（连败收工，默认 5）。
 
 ---
 
@@ -152,6 +152,8 @@ exe 只能在 Windows 上打（PyInstaller 不能交叉编译），所以 Window
 | TR 报 `error setting announce list` | 私有种子禁止改 tracker，走删除+重加（本工具默认路径） |
 | 换完 pct 不到 100% | 盘上数据本有缺口（旧种子靠 resume 假装 100%），工具已停住：补文件或取消勾选 |
 | 网页按钮点了没反应 | 用 1.12+（1.11 内嵌脚本有断行 bug）；或清缓存强刷 |
+| 勾了"我已确认"仍提示"这是【真执行】" | 1.13 前网页版 bug：勾选框的 id 撞上浏览器自带的 `confirm`，勾了取不到值（Safari/Chrome 都中招）。1.13 起改用 `#cfm`；被拦时那个框会闪红 |
+| 不知道对端是 http 还是 https | 协议留"自动"：填完地址端口自己探，结果写在旁边；选错了也会在连的时候自动换回来并在日志说明 |
 | 下载器加错地址后卡很久 | 1.12 起 8 秒内报"连不上"；旧版会重试挂 5 分钟 |
 
 ---
@@ -160,6 +162,7 @@ exe 只能在 Windows 上打（PyInstaller 不能交叉编译），所以 Window
 
 `-V` 打版本号；窗口标题、网页标签、镜像 tag 同步。
 
+- **1.13** —— 修网页窗口"我已确认"勾了不生效（勾选框 id 撞上浏览器自带 `confirm`，Safari/Chrome 全中招，真执行永远被拦）；被拦时确认框闪红提示；协议字段加"自动"：自动探 http/https + 自签证书，探不到不瞎猜，连的时候发现协议填反了会自己换过去并说明；命令行 `--scheme` 默认 auto。
 - **1.12** —— 全新 Docker/网页版（账号登录、⏻退出按钮、compose、挂载导入旧版）；修网页版一处断行使所有按钮失灵；下载器地址加错 8 秒内报"连不上"（原挂 5 分钟）；修登录失败清空账号。
 - **1.11** —— 原地编辑 tracker：不删不暂停零等待，快十几倍；qB 没忙完先处理别的稍后回看；修原地改误记失败；macOS 打包。
 - **1.10** —— 修 qB 删大种子慢时罢工（先暂停、多等卸载）。
@@ -167,4 +170,4 @@ exe 只能在 Windows 上打（PyInstaller 不能交叉编译），所以 Window
 - **1.8** —— 修回滚误伤（先比对现状）；TR 加回限速校验到 100% 才做种。
 - **1.4–1.7** —— 换失败自动回灌、`recover` 找回、开工自动找回、`import --from` 导入旧版。
 
-验证记录：真实环境数百私有种子/数十 TB 批量通过（qB 4.6.x + TR 4.0.5，零回流）；仿真自检 172 断言全过；1.12 起 Docker 版另有真浏览器全流程回归（登录/实例增删/导入旧版/退出）。
+验证记录：真实环境数百私有种子/数十 TB 批量通过（qB 4.6.x + TR 4.0.5，零回流）；仿真自检 198 断言全过（含协议探测 12 条、网页窗口真浏览器回归 11 条）；1.12 起 Docker 版另有真浏览器全流程回归（登录/实例增删/导入旧版/退出）。

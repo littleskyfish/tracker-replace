@@ -109,6 +109,7 @@ class Engine(object):
         self.busy = False
         self.thread = None
         self.lines = []
+        self.last_err = ""                               # 最近一次没让开工的原因（前端好提示）
         self.lock = threading.Lock()
         self.stop_ev = threading.Event()          # "■ 停止任务"：跑完当前这个种子就收手
 
@@ -146,8 +147,10 @@ class Engine(object):
             inplace=(form.get("inplace") or "auto"))
 
     def start(self, cmd, form, instances):
+        self.last_err = ""
         if self.busy:
-            self.emit("★ 上一个任务还没跑完，等它结束再说")
+            self.last_err = "★ 上一个任务还没跑完，等它结束再说"
+            self.emit(self.last_err)
             return False
         try:
             ns = self.form_args(form, instances, cmd)
@@ -155,7 +158,8 @@ class Engine(object):
             self.emit("★ 参数不对：%s" % e)
             return False
         if cmd == "run" and not form.get("confirmed"):
-            self.emit("★ 这是【真执行】。确认无误后把“我已确认”勾上再点。")
+            self.last_err = "★ 这是【真执行】。确认无误后把“我已确认，可以动真格”勾上再点。"
+            self.emit(self.last_err)
             return False
         if cmd == "run":
             self.emit("★ 真执行：会删旧条目（数据文件不动），日志请留着别关")
@@ -292,7 +296,7 @@ def run_tk(conf, selftest=None):
         tree.delete(*tree.get_children())
         for i in insts:
             tree.insert("", "end", values=(i.get("kind") or "自动",
-                                           "%s://%s:%s" % (i.get("scheme") or "http",
+                                           "%s://%s:%s" % (i.get("scheme") or "auto",
                                                            i.get("host"), i.get("port")),
                                            i.get("user") or "-"))
     refresh()
@@ -300,6 +304,28 @@ def run_tk(conf, selftest=None):
     lb = ttk.Frame(left)
     lb.pack(side="right", fill="y", padx=4)
     sel = lambda: tree.focus()                                     # noqa: E731
+
+    def do_probe(g, ins, hint):
+        """探一下这个地址端口说 http 还是 https，结果直接填回协议/证书勾选。"""
+        host, port = g["host"].get().strip(), g["port"].get().strip()
+        if not host or not port:
+            hint.config(text="先填地址和端口，才能探协议")
+            return
+
+        def work():
+            sc, note, trusted = tracker_replace.probe_scheme(host, port)
+            root.after(0, lambda: ui(sc, note, trusted))
+
+        def ui(sc, note, trusted):
+            if not sc:
+                hint.config(text="没探到：" + note)
+                return
+            g["proto"].set(sc)
+            if sc == "https" and not trusted:
+                ins.set(True)
+            hint.config(text="探到了 %s:%s → %s（%s）" % (host, port, sc, note))
+        hint.config(text="正在探测…")
+        threading.Thread(target=work, daemon=True).start()
 
     def edit(title, src=None, on_ok=None):
         d = tk.Toplevel(root)
@@ -316,11 +342,18 @@ def run_tk(conf, selftest=None):
         ins = tk.BooleanVar(value=bool((src or {}).get("insecure")))
         rowi = 0
         ttk.Label(d, text="协议").grid(row=rowi, column=0, sticky="w", padx=8, pady=3)
-        ttk.Combobox(d, textvariable=g["proto"], values=("http", "https"),
+        ttk.Combobox(d, textvariable=g["proto"], values=("auto", "http", "https"),
                      state="readonly", width=7).grid(row=rowi, column=1, sticky="w",
                                                      padx=8, pady=3)
         ttk.Checkbutton(d, text="跳过证书校验(自签)", variable=ins).grid(
-            row=rowi, column=1, sticky="e", padx=8)
+            row=rowi, column=2, sticky="w", padx=4)
+        ttk.Button(d, text="探协议", width=7,
+                   command=lambda: do_probe(g, ins, hint)).grid(
+            row=rowi, column=3, sticky="e", padx=8)
+        rowi += 1
+        hint = ttk.Label(d, foreground="#666",
+                         text="协议选 auto：连之前自己探（HTTPS/自签证书都会说清）")
+        hint.grid(row=rowi, column=0, columnspan=4, sticky="w", padx=8)
         rowi += 1
         for key, label, show in (("kind", "类型(留空=自动识别)", ""),
                                  ("name", "备注名", ""),
@@ -677,6 +710,9 @@ PAGE = r"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
  .row{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;align-items:center}
  .row span{font-size:13px;color:#4b5563;min-width:88px}
  .hint{color:#6b7280;font-size:12px}
+ .warnflash{background:#fee2e2;color:#b91c1c;border-radius:4px;padding:2px 6px;
+            animation:blink 0.7s 4}
+ @keyframes blink{50%{opacity:0.2}}
 </style></head><body>
 <header><b>tracker\u66ff\u6362</b><span>\u6279\u91cf\u6362 tracker \u00b7 qBittorrent / Transmission \u00b7 \u6570\u636e\u6587\u4ef6\u6c38\u4e0d\u5220\u9664</span>
 <button id="stopbtn" onclick="stopTask()" style="margin-left:auto;background:#a00;color:#fff;border:0;border-radius:6px;padding:6px 14px;cursor:pointer">\u25a0 \u505c\u6b62\u4efb\u52a1</button><button id="quitbtn" onclick="quitApp()" title="\u505c\u6b62\u7a0b\u5e8f\u9000\u51fa" style="background:#334;color:#fff;border:0;border-radius:6px;padding:6px 14px;cursor:pointer">\u23fb \u9000\u51fa</button><span id="busy"></span></header>
@@ -685,14 +721,16 @@ PAGE = r"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
   <h3>\u5ba2\u6237\u7aef\u5b9e\u4f8b <span class="hint" id="ver"></span></h3>
   <table id="tb"><thead><tr><th>\u7c7b\u578b</th><th>\u534f\u8bae://\u5730\u5740:\u7aef\u53e3</th><th>\u8d26\u53f7</th><th></th></tr></thead><tbody></tbody></table>
   <div class="row" style="margin-top:8px">
-   <select id="proto"><option value="http">http</option><option value="https">https</option></select>
+   <select id="proto"><option value="auto">\u534f\u8bae\uff1a\u81ea\u52a8</option><option value="http">http</option><option value="https">https</option></select>
    <select id="kind"><option value="">\u81ea\u52a8\u8bc6\u522b</option><option value="qb">qBittorrent</option>
    <option value="tr">Transmission</option></select>
-   <input id="host" placeholder="\u5730\u5740(\u57df\u540d\u6216IP)" size="14"><input id="port" placeholder="\u7aef\u53e3" size="6">
+   <input id="host" placeholder="\u5730\u5740(\u57df\u540d\u6216IP)" size="14" onchange="probeProto()"><input id="port" placeholder="\u7aef\u53e3" size="6" onchange="probeProto()">
    <input id="user" placeholder="\u7528\u6237\u540d" size="10"><input id="pw" placeholder="\u5bc6\u7801" size="12" type="password">
    <label class="hint"><input type="checkbox" id="insec">\u8df3\u8fc7\u8bc1\u4e66\u6821\u9a8c</label>
    <button class="btn b4" onclick="addInst()">\u6dfb\u52a0</button>
+   <button class="btn b4" style="background:#0ea5e9" onclick="probeProto()">\u63a2\u534f\u8bae</button>
   </div>
+  <div class="row" style="margin:0 0 6px"><span class="hint" id="protohint">\u534f\u8bae\u9009\u300c\u81ea\u52a8\u300d\uff1a\u586b\u5b8c\u5730\u5740\u7aef\u53e3\u5c31\u81ea\u5df1\u63a2\uff08HTTPS/\u81ea\u7b7e\u8bc1\u4e66\u90fd\u4f1a\u8bf4\u6e05\uff09</span></div>
   <div class="hint">\u9009\u4e2d\u67d0\u884c\u53ef\u5220\u9664\u3002\u914d\u7f6e\u5b58\u5728\u672c\u673a guiconfig.json\uff08\u6743\u9650 0600\uff09\u3002</div>
  </div>
  <div class="card r">
@@ -722,7 +760,7 @@ PAGE = r"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
    <label><input type="checkbox" id="seed" checked>\u6821\u9a8c\u901a\u8fc7\u5c31\u81ea\u52a8\u5f00\u59cb\u505a\u79cd</label>
    <label><input type="checkbox" id="nocap">TR \u6821\u9a8c\u671f\u4e0d\u52a0 1KB/s \u9650\u901f</label>
    <label><input type="checkbox" id="ipoff">\u540c hash \u4e0d\u539f\u5730\u6539\u3001\u6539\u7528\u5220\u9664\u91cd\u5efa</label>
-   <label><input type="checkbox" id="confirm">\u6211\u5df2\u786e\u8ba4\uff0c\u53ef\u4ee5\u52a8\u771f\u683c</label></div>
+   <label id="cfmlab"><input type="checkbox" id="cfm">\u6211\u5df2\u786e\u8ba4\uff0c\u53ef\u4ee5\u52a8\u771f\u683c</label></div>
   <div>
    <button class="btn b1" onclick="go('doctor')">\u2460 \u4f53\u68c0</button>
    <button class="btn b2" onclick="go('dry')">\u2461 \u6f14\u7ec3</button>
@@ -744,24 +782,40 @@ async function api(p,body){const r=await fetch(p,{method:body?'POST':'GET',
   headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});return r.json();}
 function render(){const b=document.querySelector('#tb tbody');b.innerHTML='';
  S.instances.forEach((x,i)=>{const tr=document.createElement('tr');if(i==S.sel)tr.className='sel';
-  tr.innerHTML=`<td>${x.kind||'\u81ea\u52a8'}</td><td>${x.scheme||'http'}://${x.host}:${x.port}</td><td>${x.user||'-'}</td>
+  tr.innerHTML=`<td>${x.kind||'\u81ea\u52a8'}</td><td>${x.scheme||'\u81ea\u52a8'}://${x.host}:${x.port}</td><td>${x.user||'-'}</td>
    <td><button class="btn b4" onclick="del(${i})">\u5220</button></td>`;
   tr.onclick=()=>{S.sel=i;render();};b.appendChild(tr);});}
-function addInst(){const h=host.value.trim(),p=parseInt(port.value||0);
+async function probeProto(){const h=host.value.trim(),p=parseInt(port.value||0);
+ const el=document.getElementById('protohint');
+ if(!h||!p){el.textContent='\u5148\u586b\u5730\u5740\u548c\u7aef\u53e3\uff0c\u624d\u80fd\u63a2\u534f\u8bae';return null;}
+ el.textContent='\u6b63\u5728\u63a2\u6d4b '+h+':'+p+'\u2026';
+ let r={};try{r=await api('/api/probe',{host:h,port:p});}catch(e){r={err:''+e};}
+ if(r.scheme){el.textContent='\u2713 '+h+':'+p+' \u2192 '+r.scheme+'\uff08'+r.note+'\uff09';
+  if(r.scheme==='https'&&!r.trusted){document.getElementById('insec').checked=true;
+   el.textContent+='\uff0c\u5df2\u81ea\u52a8\u52fe\u4e0a\u8df3\u8fc7\u8bc1\u4e66\u6821\u9a8c';}
+  return r;}
+ el.textContent='\u26a0 '+(r.err||'\u6ca1\u63a2\u5230\u534f\u8bae');return null;}
+async function addInst(){const h=host.value.trim(),p=parseInt(port.value||0);
  if(!h||!p){alert('\u5730\u5740\u548c\u7aef\u53e3\u8981\u586b');return;}
  if(!/^https?:\/\//.test(h) && /:\/\//.test(h)){alert('\u5730\u5740\u53ea\u586b\u57df\u540d\u6216IP\uff0c\u534f\u8bae\u7528\u5de6\u8fb9\u4e0b\u62c9\u6846');return;}
- S.instances.push({scheme:proto.value,kind:kind.value,host:h.replace(/^\w+:\/\//,'').replace(/\/+$/,''),
-   port:p,insecure:document.getElementById('insec').checked,
+ let sc=proto.value,insec=document.getElementById('insec').checked;
+ if(sc==='auto'){const r=await probeProto();sc=r?r.scheme:'http';
+  if(r&&r.scheme==='https'&&!r.trusted)insec=true;}
+ S.instances.push({scheme:sc,kind:kind.value,host:h.replace(/^\w+:\/\//,'').replace(/\/+$/,''),
+   port:p,insecure:insec,
    user:user.value.trim(),password:pw.value});
  api('/api/save',{instances:S.instances});render();}
 function del(i){S.instances.splice(i,1);api('/api/save',{instances:S.instances});render();}
 function form(){return{old:old.value,new_url:new_url.value,tdir:tdir.value,only:only.value,
  limit:limit.value,budget:budget.value,poll:poll.value,sleep:sleep.value,maxfail:maxfail.value,
- hash:hash.value,seed:seed.checked,nocap:nocap.checked,confirm:confirm.checked,
+ hash:hash.value,seed:seed.checked,nocap:nocap.checked,
+ confirm:document.getElementById('cfm').checked,
  inplace:document.getElementById('ipoff').checked?'off':'auto',
  rb_force:rbforce.checked,rb_keep:rbkeep.checked};}
 async function go(c){const r=await api('/api/run',{cmd:c,form:form(),instances:S.instances});
- if(r.err)log0('\u2605 '+r.err);}
+ if(r.err&&c==='run'&&r.err.indexOf('\u786e\u8ba4')>=0){   // 话日志里已有，这里只闪框不再重复打一句
+  const l=document.getElementById('cfmlab');
+  l.classList.remove('warnflash');void l.offsetWidth;l.classList.add('warnflash');}}
 async function stopTask(){await api('/api/stop',{});}
 async function quitApp(){if(!confirm('\u786e\u5b9a\u9000\u51fa\uff1f\u6b63\u5728\u8dd1\u7684\u4efb\u52a1\u4f1a\u88ab\u4e2d\u65ad'))return;
  try{await api('/api/shutdown',{});}catch(e){}
@@ -1046,6 +1100,12 @@ def run_web(conf, port, open_browser=True, host="127.0.0.1", user=None, pw=None)
                                    "inst": rep["inst"], "ledger": rep["ledger"],
                                    "tdir": rep.get("tdir", ""),
                                    "instances": state["conf"].get("instances", [])})
+            if self.path == "/api/probe":
+                sc, note, trusted = tracker_replace.probe_scheme(
+                    b.get("host", ""), b.get("port", 0))
+                if not sc:
+                    return self._json({"err": note})
+                return self._json({"scheme": sc, "note": note, "trusted": trusted})
             if self.path == "/api/save":
                 c = state["conf"]
                 c["instances"] = b.get("instances", [])
@@ -1071,7 +1131,7 @@ def run_web(conf, port, open_browser=True, host="127.0.0.1", user=None, pw=None)
                 state["conf"]["nocap"] = bool(form["nocap"])
                 save_conf(state["conf"])
                 ok = eng.start(b.get("cmd", "dry"), form, insts)
-                return self._json({"ok": ok})
+                return self._json({"ok": ok, "err": "" if ok else eng.last_err})
             if self.path == "/api/stop":
                 return self._json({"ok": eng.stop()})
             if self.path == "/api/shutdown":

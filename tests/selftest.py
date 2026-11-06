@@ -796,7 +796,8 @@ def main():
         finally:
             s2.stop()
 
-    # ---------------- QB-16 rollback --pick-state（旧备份放在远处） ----------------    if want("QB-16"):
+    # ---------------- QB-16 rollback --pick-state（旧备份放在远处） ----------------
+    if want("QB-16"):
         print("\nQB-16 --pick-state：旧版工具文件夹放在八竿子打不着的地方，回滚照样找得到")
         m, p, led, work, (oh, nh) = qb_case("QB-16", "ok")
         P = tempfile.mkdtemp(prefix="QB16")
@@ -1133,6 +1134,187 @@ def main():
                     check("拿 http 连 https 端口：直接报错，不乱猜协议", True)
             finally:
                 s.stop()
+
+    # ---------------- PROTO-2 协议自动探测 / 填反了自动纠正 ----------------
+    if want("PROTO-2"):
+        print("\nPROTO-2 协议字段：auto 自己探；填反了自己换过去；连不上不乱试")
+        import contextlib
+        import io
+        import socket
+        crt = os.path.join(HERE, "work", "tls.crt")
+        key = os.path.join(HERE, "work", "tls.key")
+        tls_ok = os.path.isfile(crt) and os.path.isfile(key)
+        if not tls_ok:
+            try:
+                subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                                "-keyout", key, "-out", crt, "-days", "2",
+                                "-subj", "/CN=localhost"],
+                               check=True, capture_output=True, timeout=120)
+                tls_ok = True
+            except Exception as e:
+                print("  （本机没有 openssl，跳过协议探测实测：%s）" % str(e)[:60])
+        if not tls_ok:
+            check("没 openssl：协议探测用例自动跳过", True)
+        else:
+            old, _n, _oh, _nh = make_pair("Movie B")
+            s1 = Server(MockQB(old, mode="ok"), tls=(crt, key))
+            s1.start()
+            s2 = Server(MockQB(old, mode="ok"))
+            s2.start()
+            probe = socket.socket()
+            probe.bind(("127.0.0.1", 0))
+            dead = probe.getsockname()[1]
+            probe.close()
+            try:
+                sc, note, trusted = tracker_replace.probe_scheme("127.0.0.1", s1.port)
+                check("auto：https 口探出来是 https", sc == "https", note)
+                check("自签证书认成「不受信」→ 提示勾跳过校验", trusted is False, note)
+                sc2, note2, _t = tracker_replace.probe_scheme("127.0.0.1", s2.port)
+                check("auto：http 口探出来是 http", sc2 == "http", note2)
+                sc3, note3, _t = tracker_replace.probe_scheme("127.0.0.1", dead)
+                check("端口没人听：探不到并说清原因", sc3 is None and bool(note3), note3)
+                sc4, note4, _t = tracker_replace.probe_scheme("", 80)
+                check("地址没填：直接说「地址没填」", sc4 is None and "地址" in note4, note4)
+
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    inst = {"host": "127.0.0.1", "port": s1.port, "kind": "qb",
+                            "user": QB_USER, "password": QB_PW, "scheme": "auto"}
+                    c = tracker_replace.connect(inst)
+                check("scheme=auto：自己探到 https 并连上",
+                      c.kind == "qb" and c.base == "https://127.0.0.1:%d" % s1.port)
+                check("探到的协议回写进实例（下次不重复探）", inst["scheme"] == "https")
+                check("自签证书自动勾上「跳过证书校验」", inst["insecure"] is True)
+                check("auto 会在日志里说清探到了什么", "自动探测协议" in buf.getvalue(),
+                      buf.getvalue()[:120])
+
+                buf2 = io.StringIO()
+                with contextlib.redirect_stdout(buf2):
+                    wrong = {"host": "127.0.0.1", "port": s1.port, "kind": "qb",
+                             "user": QB_USER, "password": QB_PW, "scheme": "http"}
+                    c2 = tracker_replace.connect(wrong)
+                check("协议填反（http 连 https 口）：自动改用 https 连上",
+                      c2.base.startswith("https://"))
+                check("填反时把正确协议回写实例", wrong["scheme"] == "https")
+                check("填反时日志提示改成什么", "自动改用 https" in buf2.getvalue(),
+                      buf2.getvalue()[:160])
+
+                buf3 = io.StringIO()
+                with contextlib.redirect_stdout(buf3):
+                    plain = {"host": "127.0.0.1", "port": s2.port, "kind": "qb",
+                             "user": QB_USER, "password": QB_PW, "scheme": "auto"}
+                    c3 = tracker_replace.connect(plain)
+                check("scheme=auto：http 口照样认出来并连上",
+                      c3.base == "http://127.0.0.1:%d" % s2.port and plain["scheme"] == "http")
+
+                t0 = time.time()
+                try:
+                    tracker_replace.connect({"host": "127.0.0.1", "port": dead, "kind": "qb",
+                                             "user": QB_USER, "password": QB_PW,
+                                             "scheme": "http"})
+                    check("端口没人听：快速失败，不反复换协议", False, "居然连上了")
+                except Exception as e:
+                    check("端口没人听：快速失败，不反复换协议",
+                          time.time() - t0 < 15 and "识别失败" in str(e),
+                          "%.1fs %s" % (time.time() - t0, str(e)[:60]))
+
+                check("looks_like_proto_mismatch 认得出协议错",
+                      tracker_replace.looks_like_proto_mismatch(
+                          "连不上 x:80（[SSL: WRONG_VERSION_NUMBER] wrong version number）")
+                      and tracker_replace.looks_like_proto_mismatch("BadStatusLine('Plain HTTP')")
+                      and not tracker_replace.looks_like_proto_mismatch(
+                          "连不上 10.0.0.9:8080（timed out）"))
+            finally:
+                s1.stop()
+                s2.stop()
+
+    # ---------------- WEB-GATE 网页窗口：确认框 / 协议自动探测 ----------------
+    if want("WEB-GATE"):
+        print("\nWEB-GATE 网页窗口：不勾「我已确认」不让真执行；协议字段自己探")
+        import socket as _sock
+        import tracker_ui
+        import urllib.error
+        import urllib.request
+
+        pg = tracker_ui.PAGE
+        check("页面没有 id=confirm（浏览器里 confirm 是弹窗函数，勾了也取不到）",
+              'id="confirm"' not in pg and "confirm.checked" not in pg)
+        check("确认框改用 #cfm 并显式取值",
+              'id="cfm"' in pg and "getElementById('cfm').checked" in pg)
+        check("协议下拉里有「自动」", 'value="auto"' in pg)
+        check("地址/端口填完自动探协议", 'onchange="probeProto()"' in pg)
+        check("被拦下时把确认框闪红", "warnflash" in pg)
+        check("后端有 /api/probe 探测接口", '/api/probe' in open(
+            os.path.join(ROOT, "tracker_ui.py"), encoding="utf-8").read())
+
+        # 起一个真的网页窗口（拷到临时目录跑，别碰开发机的 guiconfig）
+        work = os.path.join(HERE, "work", "WEB-GATE")
+        shutil.rmtree(work, ignore_errors=True)
+        os.makedirs(work)
+        for fn in ("tracker_replace.py", "tracker_ui.py"):
+            shutil.copy(os.path.join(ROOT, fn), work)
+        pk = _sock.socket()
+        pk.bind(("127.0.0.1", 0))
+        ui_port = pk.getsockname()[1]
+        pk.close()
+        pk2 = _sock.socket()
+        pk2.bind(("127.0.0.1", 0))
+        dead_port = pk2.getsockname()[1]
+        pk2.close()
+        old, _n, _oh, _nh = make_pair("Movie C")
+        m = MockQB(old, mode="ok")
+        srv = Server(m)
+        srv.start()
+        proc = subprocess.Popen([sys.executable, "tracker_replace.py", "ui",
+                                 "--ui-port", str(ui_port), "--no-browser"],
+                                cwd=work, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        live = {"host": "127.0.0.1", "port": m.port, "kind": "qb", "name": "m",
+                "user": QB_USER, "password": QB_PW, "scheme": "http"}
+
+        def api(path, body):
+            rq = urllib.request.Request("http://127.0.0.1:%d%s" % (ui_port, path),
+                                        data=json.dumps(body).encode(),
+                                        headers={"Content-Type": "application/json"})
+            try:
+                return json.loads(urllib.request.urlopen(rq, timeout=10).read().decode())
+            except urllib.error.HTTPError as e:
+                return {"err": "HTTP %s" % e.code}
+            except Exception as e:
+                return {"err": str(e)}
+
+        try:
+            for _ in range(80):
+                try:
+                    urllib.request.urlopen("http://127.0.0.1:%d/" % ui_port, timeout=1)
+                    break
+                except Exception:
+                    time.sleep(0.25)
+            r = api("/api/probe", {"host": "127.0.0.1", "port": m.port})
+            check("/api/probe：明文 qB 口探成 http", r.get("scheme") == "http", str(r)[:120])
+            r2 = api("/api/probe", {"host": "127.0.0.1", "port": dead_port})
+            check("/api/probe：没人听的端口说清原因", "scheme" not in r2 and "连不上" in r2.get("err", ""),
+                  str(r2)[:120])
+            form = {"old": "old-tracker.example", "new_url": "https://new.example/announce",
+                    "tdir": "", "only": "", "hash": "", "limit": 0, "budget": 30,
+                    "poll": 1, "sleep": 0, "maxfail": 1, "seed": True}
+            r3 = api("/api/run", {"cmd": "run", "form": dict(form, confirm=False),
+                                  "instances": [live]})
+            check("没勾确认：真执行被拦", r3.get("ok") is False and "真执行" in r3.get("err", ""),
+                  str(r3)[:140])
+            check("拦下的原因会带到页面（不只是日志里冒一句）",
+                  "确认" in r3.get("err", ""), str(r3)[:140])
+            r4 = api("/api/run", {"cmd": "run", "form": dict(form, confirm=True),
+                                  "instances": [live]})
+            check("勾了确认：真执行放行", r4.get("ok") is True and r4.get("err") == "", str(r4)[:120])
+            api("/api/stop", {})
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                proc.kill()
+            srv.stop()
 
     # ---------------- VER：版本号 / 界面按钮 ----------------
     # ---------------- TR-18 同 hash 条目已存在：比对→用户选覆盖/不动 ----------------

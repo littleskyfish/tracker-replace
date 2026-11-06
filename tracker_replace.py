@@ -56,7 +56,7 @@ import binascii
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
-VERSION = "1.12"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+VERSION = "1.13"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
 
 def _base_dir():
     """程序所在目录。PyInstaller 单文件模式下 __file__ 指向退出就销毁的临时解压
@@ -711,20 +711,137 @@ class TrClient:
 
 CLIENTS = {"qb": QbClient, "tr": TrClient}
 
+# 报错里出现这些字样，基本就是「协议填反了」（http 连 https 口 / https 连 http 口）
+# 或对端证书问题，值得再拿另一个协议试一次；纯连不上（超时、拒连、DNS）不在此列，
+# 换了协议也是白等，直接失败。
+PROTO_MARKS = ("ssl", "handshake", "wrong version number", "unknown protocol",
+               "badstatusline", "bad request version", "unexpected_eof",
+               "plaintext", "get requests not supported", "certificate",
+               "reset by peer", "connection aborted", "10054", "shut down")
+# 这些是没连上（地址/端口/网络问题），不是协议问题
+DEAD_MARKS = ("refused", "timed out", "timeout", "unreachable", "name or service",
+              "no route to host", "unknown host", "network is unreachable")
+
+
+def looks_like_proto_mismatch(msg):
+    m = (msg or "").lower()
+    if any(k in m for k in DEAD_MARKS):
+        return False
+    return any(k in m for k in PROTO_MARKS)
+
+
+def probe_scheme(host, port, timeout=4):
+    """探一下这个端口到底说 http 还是 https，用于「协议」字段的自动提示。
+
+    只做协议判断：TCP → TLS 握手 → 不通再试明文 HTTP；全程不发账号密码。
+    返回 (scheme, 说明, 证书受信吗)；scheme 为 None 表示没探出来。
+    """
+    host = (host or "").strip()
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return None, "端口不是数字", False
+    if not host:
+        return None, "地址没填", False
+    try:                                    # 0) 先确认端口有人听，别把拒连说成协议问题
+        socket.create_connection((host, port), timeout).close()
+    except Exception as e:
+        return None, "连不上 %s:%s（%s）" % (host, port, str(e)[:50]), False
+    tls_why = ""
+    try:                                    # 1) TLS 能不能握手（只看协议，不验证书）
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        sk = socket.create_connection((host, port), timeout)
+        sk.settimeout(timeout)
+        try:
+            ctx.wrap_socket(sk, server_hostname=host).close()
+        except Exception:
+            try:
+                sk.close()
+            except Exception:
+                pass
+            raise
+    except Exception as tls_err:
+        tls_why = str(tls_err)[:40]         # 2) 不是 TLS，那就试明文 HTTP
+    else:
+        trusted = False                     # 证书本身受不受信（自签就得勾「跳过证书校验」）
+        try:
+            sk2 = socket.create_connection((host, port), timeout)
+            sk2.settimeout(timeout)
+            ssl.create_default_context().wrap_socket(sk2, server_hostname=host).close()
+            trusted = True
+        except Exception:
+            pass
+        return "https", "TLS 握手成功，是 https" + (
+            "（证书正常）" if trusted else "（证书自签/不受信，要勾「跳过证书校验」）"), trusted
+    try:
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        conn.request("GET", "/")
+        resp = conn.getresponse()
+        resp.read(64)
+        conn.close()
+        return "http", "明文 HTTP 有应答（%s），是 http" % resp.status, False
+    except Exception as e:
+        msg = str(e)[:60]
+        if looks_like_proto_mismatch(msg):   # 明文也不像，多半就是 TLS 那条路超时了
+            return "https", "端口通但听不懂明文 HTTP，按 https 试（TLS：%s）" % tls_why, False
+        return None, "端口能连但既不是 http 也不是 https：%s" % msg, False
+
+
+def resolve_scheme(inst, quiet=False):
+    """实例协议填 auto / 没填 → 自己探一下并回写 inst["scheme"]，回一句提示。"""
+    s = str(inst.get("scheme") or "auto").lower().rstrip(":/")
+    if s in ("http", "https"):
+        return s
+    host, port = inst.get("host"), inst.get("port")
+    scheme, note, trusted = probe_scheme(host, port)
+    if not scheme:
+        inst["scheme"] = "http"
+        if not quiet:
+            log("ℹ %s:%s 协议探测失败（%s），先按 http 试" % (host, port, note))
+        return "http"
+    inst["scheme"] = scheme
+    if scheme == "https" and not trusted:
+        inst["insecure"] = True
+    if not quiet:
+        log("ℹ %s:%s 自动探测协议 → %s：%s" % (host, port, scheme, note))
+    return scheme
+
 
 def connect(inst):
-    """自动识别：先当 qB 试，不行再当 TR 试。"""
+    """自动识别：先当 qB 试，不行再当 TR 试。协议填反了会自己换过去再试一次。"""
     kind = inst.get("kind")
     order = [kind] if kind in CLIENTS else ["qb", "tr"]
+    scheme0 = resolve_scheme(inst)
+    ins0 = bool(inst.get("insecure"))
+    attempts = [(scheme0, ins0)]
+    if scheme0 == "http":                   # 填反了最常见的方向：其实是 https
+        attempts += [("https", False), ("https", True)]    # 先正规校验，自签再退一步
+    else:
+        attempts += [("http", False)]
     last = None
     for k in order:
-        try:
-            return CLIENTS[k](inst["host"], inst["port"], inst.get("user", ""),
-                              inst.get("password") or os.environ.get("TRREPLACE_PASSWORD", ""),
-                              (inst.get("scheme") or "http").lower(),
-                              insecure=bool(inst.get("insecure")))
-        except Exception as e:
-            last = e
+        for si, (sc, ins) in enumerate(attempts):
+            try:
+                c = CLIENTS[k](inst["host"], inst["port"], inst.get("user", ""),
+                               inst.get("password") or os.environ.get("TRREPLACE_PASSWORD", ""),
+                               sc, insecure=ins)
+            except Exception as e:
+                last = e
+                if si == 0 and not looks_like_proto_mismatch(str(e)):
+                    break                   # 不像协议问题，别浪费时间换协议
+            else:
+                if si:                      # 换了协议/证书策略才连上：回写 + 说清楚
+                    inst["scheme"] = sc
+                    inst["insecure"] = ins
+                    tip = "建议把实例里的协议也改成 %s%s" % (
+                        sc, "，并勾上「跳过证书校验」" if ins and sc == "https" else "")
+                    log("ℹ %s:%s 协议填的是 %s，实际说的是 %s —— 已自动改用 %s%s（%s）"
+                        % (inst.get("label") or inst["host"], inst["port"],
+                           scheme0, sc, sc,
+                           "（自签证书，跳过证书校验）" if ins and sc == "https" else "", tip))
+                return c
     raise RuntimeError("识别失败（qB/TR 都连不上）：%s" % str(last)[:90])
 
 
@@ -1377,7 +1494,7 @@ def load_instances(a):
     elif a.host and a.port:
         insts = [{"label": "%s:%s" % (a.host, a.port), "host": a.host, "port": a.port,
                   "kind": a.kind or "", "user": a.user or "",
-                  "scheme": getattr(a, "scheme", None) or "http",
+                  "scheme": getattr(a, "scheme", None) or "auto",
                   "insecure": bool(getattr(a, "insecure", False)),
                   "password": a.password or os.environ.get("TRREPLACE_PASSWORD", "")}]
     else:
@@ -1385,12 +1502,18 @@ def load_instances(a):
     for i in insts:
         i.setdefault("label", "%s:%s" % (i.get("host"), i.get("port")))
         i.setdefault("password", os.environ.get("TRREPLACE_PASSWORD", ""))
-        s = str(i.get("scheme") or "http").lower().rstrip(":/")
-        if s not in ("http", "https"):
-            die("实例 %s 的 scheme=%r 不认识，只支持 http / https"
+        s = str(i.get("scheme") or "auto").lower().rstrip(":/")
+        if s in ("", "detect"):
+            s = "auto"
+        if s not in ("http", "https", "auto"):
+            die("实例 %s 的 scheme=%r 不认识，只支持 http / https / auto（自动探测）"
                 % (i.get("label"), i.get("scheme")))
         i["scheme"] = s
         i.setdefault("insecure", bool(getattr(a, "insecure", False)))
+        if getattr(a, "insecure", False):
+            i["insecure"] = True
+        if s == "auto":
+            resolve_scheme(i)               # 探一次：探到就回写 scheme，探不到按 http 试
     return insts
 
 
@@ -2407,8 +2530,9 @@ def build_parser():
     ap.add_argument("--user", default="")
     ap.add_argument("--password", default="", help="留空则读环境变量 TRREPLACE_PASSWORD")
     ap.add_argument("--kind", choices=["qb", "tr"], help="跳过自动识别")
-    ap.add_argument("--scheme", choices=["http", "https"], default="http",
-                    help="WebUI/RPC 协议，默认 http；https 走 TLS")
+    ap.add_argument("--scheme", choices=["http", "https", "auto"], default="auto",
+                    help="WebUI/RPC 协议。默认 auto＝自己探一下这个端口说的是 http 还是 "
+                         "https（探不到按 http）；填 http/https 就照你说的连")
     ap.add_argument("--insecure", action="store_true",
                     help="https 时跳过证书校验（内网自签证书用，别乱开）")
     ap.add_argument("--old", default="", help="旧 tracker 的匹配子串（必给）")
