@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 """tracker替换 —— 批量替换 tracker（qBittorrent / Transmission 通吃）
 
+本文件是主程序：连下载器、换 tracker、校验判定、台账与回滚都在这里；界面在 tracker_ui.py。
+
 为什么必须"加新种子 → 确认 → 删旧种子"，而不是原地改 tracker：
 站点换 tracker 时发的是**另一份 .torrent 文件**，announce-list、created by、comment
 都可能不同，甚至 info 段也重做过 —— 拿旧种子改个 announce 凑出来的那份，站点不认，
