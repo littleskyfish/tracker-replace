@@ -1,6 +1,6 @@
 {
   "_说明": "把要操作的客户端列在这里。密码也可以不写在这里，改用环境变量 TRREPLACE_PASSWORD。",
-  "_协议": "scheme 只支持 http / https，不写当 http；https 且是自签证书时才把 insecure 设为 true。",
+  "_协议": "scheme 支持 http / https / auto（auto=自己探）。探到自签证书不会自动跳验证，要连才把 insecure 设 true。公网地址走 http 会拒发账号密码，确实要明文就加 \"allow_insecure_http\": true。",
   "_用法": "python3 tracker_replace.py doctor -c config.json --old 旧tracker的子串",
   "instances": [
     {
@@ -27,6 +27,19 @@
       "label": "自动识别",
       "host": "your-nas.example",
       "port": 9092
+    },
+    {
+      "_注": "反代：https + 子路径 + 前置 Basic，三层一起用",
+      "label": "nas-反代",
+      "host": "nas.example.com/qb",
+      "port": 443,
+      "scheme": "https",
+      "insecure": false,
+      "user": "下载器 WebUI 账号",
+      "password": "下载器 WebUI 密码",
+      "proxy_user": "反代 Basic 账号",
+      "proxy_pass": "反代 Basic 密码"
     }
-  ]
+  ],
+  "_反代": "WebUI 挂在子路径或前面还有一道 Basic 时：host 写 \"域名/子路径\"（或另加 prefix），前置账号写 proxy_user / proxy_pass（密码也可用环境变量 TRREPLACE_PROXY_PASSWORD）。"
 }
