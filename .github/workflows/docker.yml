@@ -1,7 +1,7 @@
 name: 构建并推送 Docker 镜像
 
-# 打 v* 标签（或手动触发）时：多架构构建 Dockerfile，推到 ghcr.io
-# 依赖内置的 GITHUB_TOKEN，不用配任何 secret
+# 打 tag（v*）或手动触发：多架构（amd64/arm64）构建镜像并推 ghcr.io
+# 用内置 GITHUB_TOKEN 推包，不用配任何 secret
 
 on:
   push:
