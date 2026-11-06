@@ -18,9 +18,11 @@ editTracker / TR setTrackers），不删种子、不暂停、零等待；并包�
 
 | 方式 | 适合 |
 |---|---|
-| Docker 镜像 `ghcr.io/littleskyfish/tracker-replace:1.13` | NAS / 常开服务器（下面现成命令） |
-| [Releases 下载](../../releases/latest) `tracker-replace-1.13-linux64` | Linux 服务器，`chmod +x` 直接跑 |
-| Releases 的 `tracker-replace-1.13-src.zip` 或 `git clone` | Windows / macOS / 有 Python 的机器；要 exe 在 Windows 上双击 `build_windows.bat` 打一次 |
+| Docker 镜像 `ghcr.io/littleskyfish/tracker-replace:1.14` | NAS / 常开服务器（下面现成命令） |
+| [Releases 下载](../../releases/latest) `tracker-replace-1.14-win64.exe` | **Windows，不用装 Python**，双击就开窗口 |
+| 同一个 Release 的 `tracker-replace-1.14-win64-cli.exe` | Windows 上走命令行（doctor/apply，要看输出的） |
+| 同一个 Release 的 `tracker-replace-1.14-linux64` | Linux 服务器，`chmod +x` 直接跑 |
+| `tracker-replace-1.14-src.zip` 或 `git clone` | macOS / 有 Python 的机器（自己打包用 `build_mac.sh`、`build_windows.bat`） |
 
 ---
 
@@ -33,7 +35,7 @@ docker run -d --name tracker-replace \
   -e TR_UI_USER=admin \
   -e TR_UI_PASS='自己定一个强密码' \
   --restart unless-stopped \
-  ghcr.io/littleskyfish/tracker-replace:1.13
+  ghcr.io/littleskyfish/tracker-replace:1.14
 ```
 
 浏览器打开 `http://NAS的IP:8642/`，输账号密码登录。不设 `TR_UI_PASS` 则每次启动随机生成（`docker logs tracker-replace` 查看）。仓库自带 `docker-compose.yml`，改密码/端口/路径都有注释。镜像双架构（amd64 / arm64），群晖、绿联、树莓派都能直接拉。
@@ -135,7 +137,7 @@ tracker-replace-gui.bat|.command 等  # 不打包直接双击跑
 tests/selftest.py                    # 仿真 qB/TR 靶子 + 170+ 断言（不碰真客户端）
 ```
 
-exe 只能在 Windows 上打（PyInstaller 不能交叉编译），所以 Windows 包给一键打包脚本 + 免打包直用的 .bat；macOS 同理跑 `build_mac.sh`，被 Gatekeeper 拦就 `xattr -dr com.apple.quarantine dist/tracker-replace`。
+exe 只能在 Windows 上打（PyInstaller 不能交叉编译），所以 Release 里的 win64 包由 GitHub Actions 的 windows 机器打；想自己打就在 Windows 上双击 `build_windows.bat`。macOS 同理跑 `build_mac.sh`，被 Gatekeeper 拦就 `xattr -dr com.apple.quarantine dist/tracker-replace`。
 
 运行后多出的 `results.csv`、`state/`、`guiconfig.json`（**含密码**）是你的数据，别提交进仓库。
 
@@ -162,6 +164,7 @@ exe 只能在 Windows 上打（PyInstaller 不能交叉编译），所以 Window
 
 `-V` 打版本号；窗口标题、网页标签、镜像 tag 同步。
 
+- **1.14** —— 出 Windows exe（Actions 打，没装 Python 的电脑双击就能用）；连不上时把 400/401/403/404 翻译成人话（协议填反 / 前面挡了 Basic 认证 / WebUI 挂在子路径下 / 白名单拦了）。
 - **1.13** —— 修网页「我已确认」勾了不生效；协议（http/https）改为自动探测。
 - **1.12** —— 新增 Docker 网页版（登录、退出、compose、导入旧版），修网页按钮失灵与连不上时的长时间等待。
 - **1.11** —— 改为原地编辑 tracker，不删不暂停，快十几倍，并支持 macOS 打包。
@@ -170,4 +173,4 @@ exe 只能在 Windows 上打（PyInstaller 不能交叉编译），所以 Window
 - **1.8** —— 修回滚误伤，TR 校验到 100% 才做种。
 - **1.4–1.7** —— 补齐换失败自动回灌、`recover` 找回、开工自动找回、`import` 导入旧版。
 
-验证记录：真实环境数百私有种子/数十 TB 批量通过（qB 4.6.x + TR 4.0.5，零回流）；仿真自检 198 断言全过（含协议探测 12 条、网页窗口真浏览器回归 11 条）；1.12 起 Docker 版另有真浏览器全流程回归（登录/实例增删/导入旧版/退出）。
+验证记录：真实环境数百私有种子/数十 TB 批量通过（qB 4.6.x + TR 4.0.5，零回流）；仿真自检 209 断言全过（含协议探测 12 条、反代报错翻译 11 条、网页窗口真浏览器回归 11 条）；1.12 起 Docker 版另有真浏览器全流程回归（登录/实例增删/导入旧版/退出）。
