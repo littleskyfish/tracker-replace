@@ -766,8 +766,8 @@ def http_hint(status, body="", hdrs=None):
     if st == 403:
         return ("被拒（403）：常见是 WebUI 的 IP 白名单/CSRF 限制，或前置防火墙挡了")
     if st == 404:
-        return ("路径不对（404）：域名把 WebUI 挂在子路径下了（比如 https://xx/qb/），"
-                "当前版本还不支持子路径")
+        return ("路径不对（404）：域名把 WebUI 挂在子路径下了（比如 https://xx/qb/）——"
+                "地址整串写成 域名/子路径 再连（如 nas.example.com/qb）")
     return ""
 
 
