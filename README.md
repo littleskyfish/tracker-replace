@@ -18,11 +18,11 @@ editTracker / TR setTrackers），不删种子、不暂停、零等待；并包�
 
 | 方式 | 适合 |
 |---|---|
-| Docker 镜像 `ghcr.io/littleskyfish/tracker-replace:1.14` | NAS / 常开服务器（下面现成命令） |
-| [Releases 下载](../../releases/latest) `tracker-replace-1.14-win64.exe` | **Windows，不用装 Python**，双击就开窗口 |
-| 同一个 Release 的 `tracker-replace-1.14-win64-cli.exe` | Windows 上走命令行（doctor/apply，要看输出的） |
-| 同一个 Release 的 `tracker-replace-1.14-linux64` | Linux 服务器，`chmod +x` 直接跑 |
-| `tracker-replace-1.14-src.zip` 或 `git clone` | macOS / 有 Python 的机器（自己打包用 `build_mac.sh`、`build_windows.bat`） |
+| Docker 镜像 `ghcr.io/littleskyfish/tracker-replace:latest`（要锁定版本就用具体版本号 tag） | NAS / 常开服务器（下面现成命令） |
+| [Releases 下载](../../releases/latest) `tracker-replace-<版本>-win64.exe` | **Windows，不用装 Python**，双击就开窗口 |
+| 同一个 Release 的 `tracker-replace-<版本>-win64-cli.exe` | Windows 上走命令行（doctor/apply，要看输出的） |
+| 同一个 Release 的 `tracker-replace-<版本>-linux64` | Linux 服务器，`chmod +x` 直接跑 |
+| `tracker-replace-<版本>-src.zip` 或 `git clone` | macOS / 有 Python 的机器（自己打包用 `build_mac.sh`、`build_windows.bat`） |
 
 ---
 
@@ -35,7 +35,7 @@ docker run -d --name tracker-replace \
   -e TR_UI_USER=admin \
   -e TR_UI_PASS='自己定一个强密码' \
   --restart unless-stopped \
-  ghcr.io/littleskyfish/tracker-replace:1.14
+  ghcr.io/littleskyfish/tracker-replace:latest
 ```
 
 浏览器打开 `http://NAS的IP:8642/`，输账号密码登录。不设 `TR_UI_PASS` 则每次启动随机生成（`docker logs tracker-replace` 查看）。仓库自带 `docker-compose.yml`，改密码/端口/路径都有注释。镜像双架构（amd64 / arm64），群晖、绿联、树莓派都能直接拉。
@@ -168,10 +168,23 @@ exe 只能在 Windows 上打（PyInstaller 不能交叉编译），所以 Releas
 
 ---
 
+## 连接失败怎么办
+
+按报错对号入座，每条先做一个动作就能定位：
+
+1. **登录回 204 但工具说没拿到会话**：qB 5.2 登录成功就是回 204 + Set-Cookie（老版 ≤5.1 回 200+"Ok."，工具两种都认）——204 却没登进去，先查域名前面那层反代是不是把 `Set-Cookie` 响应头吞了（nginx 默认透传，改过 `proxy_hide_header` / 缓存层要重点看）。
+2. **qB 回 Basic 挑战（Basic realm="Access to the qBittorrent WebUI"）**：这台 qB 5.2 的「选项→WebUI→认证方式」设成了 Basic（用户名和密码）——用户名/密码栏直接填 WebUI 账号密码即可，工具会自动用 Basic 头认证；还报错就是这套账号密码本身不对。
+3. **qB 回 Bearer 挑战（401 或 403 都要按这个处理）**：认证方式设成了 API Key——到 qBittorrent→选项→WebUI→安全 生成 WebUI API Key，在「密码」栏填 `QB-APIKEY-<那串Key>`（填在「用户名」栏也认），或把那页改回「用户名和密码」。
+4. **401 且 realm 不是 qBittorrent/Transmission（如 nginx 默认 realm=主机名）**：这是域名前面挡的那层 Basic，不是下载器自己回的——填到「前置账号(反代)」/「前置密码」两栏（网页版是「前置账号(反代 Basic)」），不是 WebUI 账号；拿不准就绕过反代直连内网端口试一次。
+5. **404 但浏览器能打开 WebUI**：WebUI 挂在子路径下（如 `http://ip:40001/qb`）——在「地址(域名/IP/带子路径)」栏把那段补全（如 `nas.example.com/qb`），不是单独再开一栏。
+
+---
+
 ## 版本
 
 `-V` 打版本号；窗口标题、网页标签、镜像 tag 同步。
 
+- **1.15.1** —— 认证说明同步：qB 5.2 三种形态（204 登录 / Basic / API Key 填 `QB-APIKEY-<key>`）在界面和文档里写清；401 按 realm 分流，Transmission 与识别失败不再误报「前置挡了一层 Basic」。
 - **1.15** —— 反代场景补齐：地址可写子路径、能填前置 Basic 账号；公网明文不发密码、自签证书不再自动免验证、界面密码默认不写进配置文件。
 - **1.14** —— 出 Windows exe（Actions 打，没装 Python 的电脑双击就能用）；连不上时把 400/401/403/404 翻译成人话（协议填反 / 前面挡了 Basic 认证 / WebUI 挂在子路径下 / 白名单拦了）。
 - **1.13** —— 修网页「我已确认」勾了不生效；协议（http/https）改为自动探测。

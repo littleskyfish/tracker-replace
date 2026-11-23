@@ -58,7 +58,7 @@ import binascii
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
-VERSION = "1.15"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+VERSION = "1.15.1"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
 
 def _base_dir():
     """程序所在目录。PyInstaller 单文件模式下 __file__ 指向退出就销毁的临时解压
@@ -225,7 +225,8 @@ class _Hdrs(dict):
 
 
 class _Resp(object):
-    def __init__(self, status, body, headers):
+    def __init__(self, status, body, headers, cookies=None):
+        self.cookies = dict(cookies or {})
         self.status_code = status
         self.content = body or b""
         self.headers = _Hdrs(headers or [])
@@ -249,7 +250,8 @@ class _StdClient(object):
         self.headers = {}
         self.cookies = {}
         self.insecure = bool(insecure)              # https 且是自签证书时才用
-        self._pool = {}                               # (scheme,host,port) -> 复用连接；Windows 频繁开关连接会把本地端口耗进 TIME_WAIT（WinError 10048）
+        self._pool = {}                               # (scheme,host,port) -> 复用连接
+        self.last_set_cookie = []                     # 最近一次响应的 Set-Cookie 原始头（排障用）；Windows 频繁开关连接会把本地端口耗进 TIME_WAIT（WinError 10048）
 
     def _conn(self, scheme, host, port, timeout=None):
         """按协议建连接：https 默认校验证书，insecure=True 才跳过。
@@ -312,6 +314,7 @@ class _StdClient(object):
         raise last
 
     def _keep(self, hdr_pairs):
+        self.last_set_cookie = [v for k, v in hdr_pairs if k.lower() == "set-cookie"]
         for k, v in hdr_pairs:
             if k.lower() == "set-cookie":
                 name, _, val = v.split(";", 1)[0].partition("=")
@@ -365,7 +368,7 @@ class _StdClient(object):
         for _ in range(6):                            # 处理 301/302/307 跳转
             code, raw, pairs = self._do(method, scheme, host, port, path, hd, body, timeout)
             self._keep(pairs)
-            last = _Resp(code, raw, pairs)
+            last = _Resp(code, raw, pairs, self.cookies)
             if code in (301, 302, 303, 307, 308):
                 loc = last.headers.get("Location") or ""
                 if not loc:
@@ -407,13 +410,10 @@ class QbClient:
         self.s = _StdClient(timeout=timeout, insecure=insecure)
         if proxy:
             self.s.auth = (proxy[0], proxy[1] or "")      # 反代前面那层 Basic，跟 WebUI 账号两码事
-        r = self.s.post(self.base + "/api/v2/auth/login",
-                        data={"username": user, "password": pw}, timeout=timeout)
-        if r.status_code != 200 or r.text.strip() != "Ok.":
-            hint = http_hint(r.status_code, r.text, r.headers)
-            raise RuntimeError("qB 登录失败 HTTP %s：%s" % (
-                r.status_code,
-                hint or "若 403 请检查 WebUI 白名单/CSRF；正文：%s" % " ".join(r.text.split())[:80]))
+        bad, extra = self._try_login(user, pw, timeout)
+        if bad is not None:
+            raise RuntimeError("qB 连接失败 HTTP %s：%s%s" % (
+                bad.status_code, qb_auth_hint(bad, user), extra or ""))
         self.api = self._get("/api/v2/app/webapiVersion")
         self.version = self._get("/api/v2/app/version")
         # skip_checking 自 qB 3.3.13(2017) 起就有；v5.3.0 已知会忽略该参数
@@ -421,6 +421,82 @@ class QbClient:
             self.vtuple = tuple(int(x) for x in self.version.lstrip("v").split(".")[:3])
         except ValueError:
             self.vtuple = (0, 0, 0)
+
+    def _try_login(self, user, pw, timeout):
+        """qB 各版本认证形态逐个试，通一个就返回 (None, "")；
+        全不通返回 (最有信息量的失败响应, 补充事实)。
+        顺序：API Key → Basic（5.2 起 WebUI 直接吃这个头，无需登录）→ auth/login 表单。"""
+        probe = "/api/v2/app/version"
+        last = None
+        key = ""
+        # 前缀只认密码栏。旧写法先从密码栏剥前缀、再 elif 看用户栏：密码栏填了普通口令时
+        # 也照样进 API Key 分支，把口令当 Key 用 Bearer 发出去——Basic 模式服务器回
+        # 403+Basic 挑战，被「明确要这种认证」的早退规则拦下，永远走不到 Basic 探测
+        # （QB-23 根因）。用户栏填 Key（带前缀）同样进 Key 探测；密码栏口令不参与。
+        if (pw or "").strip().startswith("QB-APIKEY-"):
+            key = (pw or "").strip()[len("QB-APIKEY-"):]
+            pw = ""
+        elif (user or "").startswith("QB-APIKEY-"):
+            key = (user or "")[len("QB-APIKEY-"):]
+            user = ""
+        if key:                        # ① API Key（qB 5.2：选项→WebUI→安全 里生成）
+            for hk, hv in (("Authorization", "Bearer " + key), ("X-WebUI-ApiKey", key)):
+                self.s.headers[hk] = hv
+                r = self.s.get(self.base + probe, timeout=timeout)
+                if r.status_code == 200:
+                    return None, ""
+                last = r
+                self.s.headers.pop(hk, None)
+                wa = _www_auth(r)
+                if wa:                           # 服务器明确要某种认证 → 别再往下试
+                    # 挑战点明 Bearer/API Key 却回 403（不带认证也 403）：那是前置网关
+                    # 模仿后端的特征。此时表单那条路还没试过，先试完再定罪，
+                    # 免得把「口令其实能用」误报成「请改用 API Key」。
+                    if "bearer" in wa.lower() and r.status_code == 403:
+                        continue
+                    return r, ""
+        self.s.cookies.clear()         # 每种认证从干净状态开始（真机各凭据互不相干）
+        if user or pw:                 # ② Basic：WebUI 认证方式选 Basic 时免登录直接用
+            import base64
+            tok = base64.b64encode(("%s:%s" % (user, pw)).encode()).decode()
+            self.s.headers["Authorization"] = "Basic " + tok
+            r = self.s.get(self.base + probe, timeout=timeout)
+            if r.status_code == 200:
+                # Basic 探测当场建会话：Set-Cookie 已收下，撤掉 Authorization 头，
+                # 后续请求只带会话 cookie。不撤的话 cookie+Basic 长期混发，
+                # 真机能容忍，但个别反代（重算 Basic 后再鉴权）会踩混发规则
+                # （US-002 顺手处理，与 Key 形态成功后清凭据的不变式对齐）
+                self.s.headers.pop("Authorization", None)
+                return None, ""
+            last = r
+            self.s.headers.pop("Authorization", None)
+            if _www_auth(r):                     # 明确要 Basic：不对就直说，不用表单再试
+                return r, ""
+        self.s.headers.pop("Authorization", None)   # 没谈成的头别带进登录请求
+        got_auth_probe = last is not None   # 前面探测过凭据形态，cookie 状态才可归因
+        r = self.s.post(self.base + "/api/v2/auth/login",   # ③ 表单登录（老形态）
+                        data={"username": user, "password": pw}, timeout=timeout)
+        if qb_login_ok(r):
+            return None, ""
+        # 204 却没拿到会话 cookie（登录响应压根没发 Set-Cookie）：反代吞 cookie /
+        # 前置挡认证的典型特征。要赶在「挑 WWW-Authenticate」之前判——那种 403 多半是
+        # 网关回的（带自己的挑战头），让它当选会把真因说成白名单。
+        # 只有本轮确实探测过凭据（Basic 不认 + 表单 204 无 cookie）才敢这么归因，
+        # 免得把「纯错密码的 204」也说成反代问题。
+        if r is not None and r.status_code == 204 and got_auth_probe \
+                and not self.s.last_set_cookie:
+            return (last if last is not None else r), (
+                "。另外：登录回了 204，响应里却没带任何 Set-Cookie，会话建不起来——"
+                "204 却没拿到会话 cookie，多半是反代吞了 Set-Cookie 或前置挡了认证")
+        # 挑最有信息量的一条来报错：带 WWW-Authenticate 的优先（它直接说明服务器要哪种认证）
+        for cand in (r, last):
+            if cand is not None and _www_auth(cand):
+                return cand, ""
+        # 204 没拿到会话 + 同轮收到过其它失败：把两件事并成一句（反代吞 cookie 的真实场景）
+        if r is not None and r.status_code == 204 and last is not None \
+                and last.status_code != 200:
+            return last, ""
+        return (r if last is None else last), ""
 
     def _get(self, path, **params):
         r = self.s.get(self.base + path, params=params, timeout=self.timeout)
@@ -572,6 +648,25 @@ class QbClient:
                     data={"hashes": json.dumps([h])}, timeout=self.timeout)
 
 # ------------------------------------------------------------ Transmission
+def tr_auth_hint(resp):
+    """TR 收到 401 时按认证来源说清是哪一层（US-002）：
+    realm 点名 Transmission = RPC 自己的账号密码不对；
+    挑战里没有 Transmission（典型是 nginx Basic auth 挡了一层）= 前置网关的。
+    口径与 qB 侧 qb_auth_hint 一致，只是点名的对象换成 Transmission。"""
+    src, wa = _auth_by_realm(resp.status_code, getattr(resp, "headers", None))
+    if src == "service":
+        return ("Transmission 自己的 401（realm 点名 Transmission，挑战：%s）："
+                "RPC 账号或密码不对。到 Transmission→偏好→对等共享/远程控制 里核对"
+                "「认证 RPC 请求」的用户名密码，与本工具实例里填的一致" % wa[:60])
+    if src == "gateway":
+        return ("这个域名前面还挡了一层 Basic 认证（401，挑战：%s）：这一般是反代/网关挡的，"
+                "不是 Transmission 回的。在「反代账号密码」栏填那层账号密码，"
+                "或绕过反代直连 TR 端口" % wa[:60])
+    # 没有挑战头的 401：只能说不清来源，给排查顺序
+    return ("401 且服务器没回 WWW-Authenticate，分不清是前置网关还是 RPC 的："
+            "先填「反代账号密码」栏试前置那层；没有反代就核对偏好→对等共享/远程控制 里的 RPC 账号")
+
+
 class TrClient:
     kind = "tr"
 
@@ -608,8 +703,10 @@ class TrClient:
                 r.headers.get("X-Transmission-Session-Id", "")
                 continue
             if r.status_code == 401:
+                # 不再直接拼 http_hint 通用文案：按 WWW-Authenticate 的 realm 分流，
+                # 「反代账号密码栏」vs「偏好→对等共享/远程控制里的 RPC 账号」二选一（US-002）
                 raise RuntimeError("TR 认证失败(401)：%s"
-                                   % (http_hint(401, r.text, r.headers) or "账号或密码不对"))
+                                   % (tr_auth_hint(r) or "账号或密码不对"))
             if r.status_code != 200:
                 raise RuntimeError("TR HTTP %s：%s" % (
                     r.status_code,
@@ -746,6 +843,113 @@ DEAD_MARKS = ("refused", "timed out", "timeout", "unreachable", "name or service
               "no route to host", "unknown host", "network is unreachable")
 
 
+def _www_auth(resp):
+    """响应里的 WWW-Authenticate（没有就空串）。"""
+    try:
+        return resp.headers.get("WWW-Authenticate") or ""
+    except Exception:
+        return ""
+
+
+def qb_auth_hint(resp, user):
+    """连不上 qB 时按实际响应说清是哪一层：前置网关 / qB 的 Basic / API Key / 白名单。"""
+    ch = ""
+    try:
+        ch = resp.headers.get("WWW-Authenticate") or ""
+    except Exception:
+        pass
+    body = " ".join((resp.text or "").split())[:80]
+    low = (ch + " " + body).lower()
+    # realm 点名 qBittorrent = qB 自己发的挑战：即便中间网关也照抄了 "basic" 字样，
+    # 这条必须排在「401/403+basic=怪网关」之前，否则真机 Basic 模式错密码
+    # （403+Basic realm="Access to the qBittorrent WebUI"）会被误报成前置挡了一层。
+    if "basic" in low and "qbittorrent" in low:
+        return ("qB 自己的 Basic 认证没过（WebUI「认证方式」= Basic）：账号或密码不对。"
+                "确认是 WebUI 那一套凭据（选项→WebUI→认证 可看/改）；"
+                "如果那页其实选的是 API Key，把生成的 Key 填到「密码」栏并在前面加 QB-APIKEY-")
+    # 协议填反（明文打到 https 口）先于其它认证话题判：这是最外层的事，
+    # 网关的 400 页里那句 "plain HTTP request sent to HTTPS port" 是铁证。
+    # 用整页正文判（body 已截到 80 字，那句话在页面后半段）
+    proto = http_hint(resp.status_code, getattr(resp, "text", "") or "",
+                      getattr(resp, "headers", None))
+    if proto and "https" in proto:
+        return proto
+    if resp.status_code in (401, 403) and "basic" in low:
+        return ("前面有一层 Basic 认证（%s）：这一般是反代/网关挡的，不是 qB 回的。"
+                "在「反代账号密码」栏填那层账号密码，或绕过反代直连 qB 端口" % ch[:60])
+    if resp.status_code == 401 and "qbittorrent" in low:
+        return ("qB 的 WebUI 自己回了 401：账号或密码不对（选项→WebUI→认证 可看/改）")
+    if resp.status_code == 401 and "bearer" in low:
+        return ("这台 qB 的 WebUI 认证方式是 API Key：到 qBittorrent→选项→WebUI→安全 生成 "
+                "WebUI API Key，把那一串填到「密码」栏并在前面加 QB-APIKEY-（例："
+                "QB-APIKEY-xxxxxxxx），或把那页改回「用户名和密码」")
+    # 真机 qB 5.2 API Key 模式对未认证请求回的是 403+Bearer 挑战（不是 401）。
+    # 这条要赶在通用 403（白名单/CSRF）分支前面，否则 Key 模式会误报成白名单。
+    if "bearer" in low and "qbittorrent" in low:
+        return ("这台 qB 的 WebUI 认证方式是 API Key（服务器要 Bearer 凭据）："
+                "到 qBittorrent→选项→WebUI→安全 生成 WebUI API Key，"
+                "把那一串填到「密码」栏并在前面加 QB-APIKEY-（例：QB-APIKEY-xxxxxxxx）")
+    if resp.status_code == 401 and ch:
+        return ("前面有一层 Basic 认证（%s）：这一般是反代/网关挡的，不是 qB 回的。"
+                "在「反代账号密码」栏填那层账号密码，或绕过反代直连 qB 端口" % ch[:60])
+    if resp.status_code == 401:
+        return ("401：账号或密码不对（这是 WebUI 自己的账号，选项→WebUI→认证 可以看/改）。"
+                "若认证方式是 API Key：密码栏填那串 Key，前面加 QB-APIKEY-")
+    if resp.status_code == 403:
+        return ("403：多半是 IP 白名单或 CSRF 限制。检查 选项→WebUI→认证 的「IP 白名单」"
+                "（清空或加 127.0.0.1/::1）；反代场景把 qB 的「信任的反向代理」配上"
+                "（正文：%s）" % (body or "无"))
+    if resp.status_code == 204:
+        return ("204：qB 5.2 登录本来就是 204 空正文（会话在 Set-Cookie 里），这次却没拿到"
+                "会话 cookie——多半是反代吃掉了 Set-Cookie，或这层挡着 Basic/API Key 认证")
+    if resp.status_code == 404:
+        return ("404：路径不对，WebUI 多半挂在子路径下（比如 http://ip:40001/qb）——"
+                "在「子路径」栏补上那一段（如 /qb）")
+    return "正文：%s" % (body or "无")
+
+
+def qb_login_ok(resp):
+    """qB 登录成功？≤5.1 是 200+正文 "Ok."；≥5.2 是 204 空正文 + Set-Cookie 里的会话
+    （SID / QBT_SID_<端口>）。只认前一种会把 5.2 的正确登录判成失败。"""
+    if resp.status_code == 200:
+        return resp.text.strip() == "Ok."
+    if resp.status_code == 204:
+        for k in resp.cookies:
+            if "sid" in k.lower():
+                return True
+        try:
+            return "sid" in (resp.headers.get("Set-Cookie") or "").lower()
+        except Exception:
+            return False
+    return False
+
+
+def _auth_by_realm(status, hdrs):
+    """按 WWW-Authenticate 的 realm 判 401 是哪一层发的（qB/TR 通用口径）。
+
+    qB 真机回 'Basic realm="Access to the qBittorrent WebUI"'，TR 回
+    'Basic realm="Transmission"'——realm 点名叫到客户端自己的名字 = 服务自身的
+    认证；点了别的名字或压根没有 = 前置反代/网关挡的（US-001 在 qb_auth_hint
+    里定的分流口径，US-002 提炼成公共函数给 TR 侧用，并修掉 http_hint 里
+    「401 见 Basic 就怪网关」的误判——老板看到过把 TR 自己的 401 说成
+    「这个域名前面还挡了一层 Basic 认证」，根源就在这）。
+
+    返回 ("service"|"gateway"|"" , WWW-Authenticate 原文)。"""
+    if (status or 0) != 401:
+        return "", ""
+    wa = ""
+    try:
+        wa = (hdrs.get("WWW-Authenticate") if hdrs is not None else "") or ""
+    except Exception:
+        wa = ""
+    low = wa.lower()
+    if "qbittorrent" in low or "transmission" in low:
+        return "service", wa
+    if "basic" in low:
+        return "gateway", wa
+    return "", wa
+
+
 def http_hint(status, body="", hdrs=None):
     """网关/反代回的那些码，翻译成人话（返回空串表示没 insight）。"""
     b = " ".join((body or "")[:200].split())
@@ -754,20 +958,24 @@ def http_hint(status, body="", hdrs=None):
     if st == 400 and "plain http request" in low:
         return ("这个端口说的是 https，你填的是 http —— 协议选「自动」或直接改成 https")
     if st == 401:
-        wa = ""
-        try:
-            wa = (hdrs.get("WWW-Authenticate") if hdrs is not None else "") or ""
-        except Exception:
-            wa = ""
-        if "basic" in wa.lower():
+        src, wa = _auth_by_realm(st, hdrs)
+        if src == "service":
+            # realm 点名 qBittorrent/Transmission：这是服务自己的认证没过，
+            # 不是前面挡了一层（旧文案见 Basic 就怪网关，把 TR 的 401 误判成前置挡的）
+            return ("账号或密码不对（401）：这是 WebUI/RPC 自己的认证，不是前置网关挡的")
+        if src == "gateway":
             return ("这个域名前面还挡了一层 Basic 认证（401）：需要的是前置账号密码，"
                     "不是 qB/TR 的 WebUI 账号")
         return "账号或密码不对（401）"
     if st == 403:
         return ("被拒（403）：常见是 WebUI 的 IP 白名单/CSRF 限制，或前置防火墙挡了")
     if st == 404:
-        return ("路径不对（404）：域名把 WebUI 挂在子路径下了（比如 https://xx/qb/）——"
-                "地址整串写成 域名/子路径 再连（如 nas.example.com/qb）")
+        return ("路径不对（404）：域名把 WebUI 挂在子路径下了（比如 https://xx/qb/），"
+                "当前版本还不支持子路径")
+    if st == 204:
+        return ("204 是没给会话 cookie 的异常回法：qB 5.2 登录成功确实是 204，但会带会话 "
+                "cookie。被中间的反代/代理吃掉 Set-Cookie，或账号密码不对时才会这样——"
+                "先在浏览器用同一地址登录一次 WebUI 验证账号")
     return ""
 
 
@@ -939,6 +1147,7 @@ def connect(inst):
     # 填反了最常见的方向：http↔https；证书校验按用户自己的勾选，不擅自放宽
     attempts.append(("https" if scheme0 == "http" else "http", ins0))
     last = None
+    reasons = []      # 每个 kind 留一条最具体的失败原因（US-002：聚合报错要 qB/TR 各列一条）
     for k in order:
         for si, (sc, ins) in enumerate(attempts):
             try:
@@ -946,6 +1155,8 @@ def connect(inst):
                                prefix=prefix, proxy=proxy)
             except Exception as e:
                 last = e
+                if not reasons or reasons[-1][0] != k:
+                    reasons.append((k, str(e)))   # 同 kind 换协议重试时，留第一条（最初的真实死因）
                 if si == 0 and not looks_like_proto_mismatch(str(e)):
                     break                   # 不像协议问题，别浪费时间换协议
             else:
@@ -959,7 +1170,12 @@ def connect(inst):
                            scheme0, sc, sc,
                            "（自签证书，跳过证书校验）" if ins and sc == "https" else "", tip))
                 return c
-    raise RuntimeError("识别失败（qB/TR 都连不上）：%s" % str(last)[:90])
+    # 聚合报错：qB 侧与 TR 侧各自最具体的那条原因分别列出（不再只截最后一条 str(last)[:90]）
+    label = {"qb": "qBittorrent", "tr": "Transmission"}
+    parts = ["%s：%s" % (label.get(k, k), r) for k, r in reasons]
+    if not parts:
+        parts = [str(last)]
+    raise RuntimeError("识别失败（qB/TR 都连不上）—— " + "； ".join(parts))
 
 
 # --------------------------------------------------------------- 台账/结果
@@ -1674,7 +1890,9 @@ def cmd_apply(a):
         try:
             c = connect(inst)
         except Exception as e:
-            print("%s 连不上：%s" % (key, str(e)[:70]))
+            # US-002：这里以前掐到 70 字，聚合报错（qB 侧+TR 侧各一条）的指引全被截没，
+            # 用户只剩「这个域名前面还挡了一层 Basic 认证（401」这种半截话
+            print("%s 连不上：%s" % (key, str(e)))
             continue
         cp = c.caps()
         bk = scan_backups()

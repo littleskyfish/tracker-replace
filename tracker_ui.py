@@ -414,6 +414,11 @@ def run_tk(conf, selftest=None):
                 row=rowi, column=1, sticky="ew", padx=8, pady=3)
             rowi += 1
         ttk.Label(d, foreground="#666", wraplength=400, justify="left",
+                  text="qB 5.2「选项→WebUI→认证方式」若是 API Key：密码栏填 QB-APIKEY-<key>；"
+                       "设成 Basic（用户名和密码）则直接填 WebUI 账号密码").grid(
+            row=rowi, column=0, columnspan=4, sticky="w", padx=8)
+        rowi += 1
+        ttk.Label(d, foreground="#666", wraplength=400, justify="left",
                   text="密码默认不存盘（要存在 guiconfig.json 里写 save_passwords）；"
                        "前置账号是反代那层 Basic，跟下载器账号不是一套").grid(
             row=rowi, column=0, columnspan=4, sticky="w", padx=8)
@@ -790,6 +795,7 @@ PAGE = r"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
    <label class="hint"><input type="checkbox" id="plain">\u786e\u8ba4\u8d70\u660e\u6587 HTTP</label>
   </div>
   <div class="row" style="margin:0 0 6px"><span class="hint" id="protohint">\u534f\u8bae\u9009\u300c\u81ea\u52a8\u300d\uff1a\u586b\u5b8c\u5730\u5740\u7aef\u53e3\u5c31\u81ea\u5df1\u63a2\uff08HTTPS/\u81ea\u7b7e\u8bc1\u4e66\u90fd\u4f1a\u8bf4\u6e05\uff09</span></div>
+  <div class="hint">qB 5.2 \u300c\u9009\u9879\u2192WebUI\u2192\u8ba4\u8bc1\u65b9\u5f0f\u300d\u82e5\u662f API Key\uff1a\u5bc6\u7801\u680f\u586b QB-APIKEY-<key>\uff1b\u8bbe\u6210 Basic\uff08\u7528\u6237\u540d\u548c\u5bc6\u7801\uff09\u5219\u76f4\u63a5\u586b WebUI \u8d26\u53f7\u5bc6\u7801\u3002</div>
   <div class="hint">\u5730\u5740\u53ef\u5199\u5b50\u8def\u5f84\uff08\u5982 nas.xx.com/qb\uff09\u3002\u9009\u4e2d\u67d0\u884c\u53ef\u5220\u9664\u3002\u5bc6\u7801\u9ed8\u8ba4\u4e0d\u5199\u8fdb guiconfig.json\uff0c\u6bcf\u6b21\u6253\u5f00\u8f93\u4e00\u6b21\u3002</div>
  </div>
  <div class="card r">

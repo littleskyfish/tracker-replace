@@ -36,6 +36,7 @@ sys.path.insert(0, ROOT)
 import tracker_replace                                        # noqa: E402
 
 QB_USER, QB_PW = "qb-user", "qb-test-pw"
+QB_APIKEY = "SECRETKEY123"
 TR_USER, TR_PW = "tr-user", "tr-test-pw"
 OLD = "https://old-tracker.example/announce?passkey=OLDKEY"
 NEW = "https://new.example.org/announce?passkey=NEWKEY"
@@ -127,6 +128,9 @@ class MockQB(object):
             "state": "uploading", "downloaded": 0, "trackers": [OLD],
             "category": "pt", "tags": "oldtr", "size": 4096, "paused": False}
         self.unwanted = unwanted
+        self.authmode = ""                     # ""=表单登录 / basic / apikey（qB 5.2 新形态）
+        self.mode204 = False                   # 登录成功改回 204 空正文（qB 5.2.x）
+        self.mode204nocookie = False           # 204 且不给会话 cookie
         self.snapshot_at_add = None            # 加新那一刻列表里有谁
 
     def find(self, path):
@@ -167,6 +171,43 @@ class MockQB(object):
                 app = self.server.app
                 u = urlparse(self.path)
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
+                amode = getattr(app, "authmode", "")
+                if amode == "form":
+                    # US-002/QB-22：显式钉死「认证形态=表单」，免得 mock 默认值哪天变了，
+                    # nocookie 那条断言悄悄改成靠别的分支过（假通过）
+                    amode = ""
+                ah = self.headers.get("Authorization") or ""
+                akey = self.headers.get("X-WebUI-ApiKey") or ""
+                if amode == "basic" and u.path.startswith("/api/"):
+                    # 真机：先认会话 cookie；带对的 Basic 头 = 建/续会话（Set-Cookie）
+                    body = b"v4.6.7" if u.path.endswith("version") else b"2.0.1"
+                    if self.headers.get("Cookie") == "SID=1":
+                        return self._send(200, body)
+                    if ah == "Basic " + base64.b64encode(
+                            ("%s:%s" % (QB_USER, QB_PW)).encode()).decode():
+                        return self._send(200, body, extra={"Set-Cookie": "SID=1; Path=/"})
+                    return self._send(403, b"Forbidden", extra={
+                        "WWW-Authenticate":
+                            'Basic realm="Access to the qBittorrent WebUI"'})
+                if amode and u.path.startswith("/api/") and self.headers.get("Cookie") != "SID=1":
+                    body = b"v4.6.7" if u.path.endswith("version") else b"2.0.1"
+                    if amode == "apikey":
+                        # 真机：Key 对 → 建会话；带了但不对 → 403+Bearer；
+                        # 什么都没带 → 放行给下面的表单登录（真机顺序）
+                        if ah == "Bearer " + QB_APIKEY or akey == QB_APIKEY:
+                            return self._send(200, body, extra={"Set-Cookie": "SID=1; Path=/"})
+                        if ah.startswith("Bearer ") or akey:
+                            return self._send(403, b"Forbidden", extra={
+                                "WWW-Authenticate":
+                                    'Bearer realm="qBittorrent", error="invalid_token"'})
+                    if amode == "basic":
+                        return self._send(403, b"Forbidden", extra={
+                            "WWW-Authenticate":
+                                'Basic realm="Access to the qBittorrent WebUI"'})
+                    if amode == "apikey" and (ah.startswith("Bearer ") or akey):
+                        return self._send(403, b"Forbidden", extra={
+                            "WWW-Authenticate":
+                                'Bearer realm="qBittorrent", error="invalid_token"'})
                 if u.path.startswith("/api/") and self.headers.get("Cookie") != "SID=1":
                     return self._send(403, b"Forbidden")
                 app.calls.append((u.path, q))
@@ -211,10 +252,68 @@ class MockQB(object):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(n) if n else b""
                 ctype = self.headers.get("Content-Type") or ""
+                # qB 5.2 新认证形态（选项→WebUI→认证方式）：basic / apikey
+                amode = getattr(app, "authmode", "")
+                if amode == "form":
+                    amode = ""             # 同 do_GET：显式钉死表单形态，防默认值漂移假通过
+                has_sess = self.headers.get("Cookie") == "SID=1"
+                ah = self.headers.get("Authorization") or ""
+                if amode == "apikey" and u.path.startswith("/api/") and not has_sess:
+                    key = self.headers.get("X-WebUI-ApiKey") or ""
+                    if not (ah == "Bearer " + QB_APIKEY or key == QB_APIKEY):
+                        return self._send(403, b"Forbidden", extra={
+                            "WWW-Authenticate":
+                                'Bearer realm="qBittorrent", error="invalid_token"'})
+                if amode == "basic" and u.path.startswith("/api/") and not has_sess:
+                    # 正确的 Basic 头 = 当场建会话并下发 cookie；缺/错 = 403（未认证）
+                    good = ah == "Basic " + base64.b64encode(
+                        ("%s:%s" % (QB_USER, QB_PW)).encode()).decode()
+                    if not good:
+                        return self._send(403, b"Forbidden", extra={
+                            "WWW-Authenticate":
+                                'Basic realm="Access to the qBittorrent WebUI"'})
+                    return self._send(200, b"v4.6.7" if u.path.endswith("version")
+                                      else b"2.0.1",
+                                      extra={"Set-Cookie": "SID=1; Path=/"})
+                elif amode == "apikey" and u.path.startswith("/api/") and not has_sess:
+                    # API Key 是叠加能力：Key 对→放行；带错 Key→403+Bearer 挑战；
+                    # 什么都没带→落到下面的表单登录（真机顺序）
+                    key = self.headers.get("X-WebUI-ApiKey") or ""
+                    if ah == "Bearer " + QB_APIKEY or key == QB_APIKEY:
+                        return self._send(200, b"v4.6.7" if u.path.endswith("version")
+                                          else b"2.0.1")
+                    if ah.startswith("Bearer ") or key:
+                        return self._send(403, b"Forbidden", extra={
+                            "WWW-Authenticate":
+                                'Bearer realm="qBittorrent", error="invalid_token"'})
                 if u.path == "/api/v2/auth/login":
+                    if amode == "apikey":
+                        # 真机：Key 模式下口令表单仍可登录（Key 是叠加凭据，不关表单这条路）。
+                        # 但普通账号过不了上面 API 层的 Key 检查——工具的 API Key 分支
+                        # 在收到 Bearer 挑战后按服务器指明的形态直接报错，不再落表单。
+                        f2 = {k: v[0] for k, v in parse_qs(body.decode()).items()}
+                        if f2.get("username") == QB_USER and f2.get("password") == QB_PW:
+                            return self._send(200, b"Ok.", extra={"Set-Cookie": "SID=1; Path=/"})
+                        return self._send(403, b"Forbidden", extra={
+                            "WWW-Authenticate":
+                                'Bearer realm="qBittorrent", error="invalid_token"'})
+                    if amode == "basic":
+                        # 认证方式=Basic 时表单登录不再是入口：按 Basic 头判
+                        good = ah == "Basic " + base64.b64encode(
+                            ("%s:%s" % (QB_USER, QB_PW)).encode()).decode()
+                        if good:
+                            return self._send(204, b"", extra={"Set-Cookie": "SID=1; Path=/"})
+                        return self._send(403, b"Forbidden", extra={
+                            "WWW-Authenticate":
+                                'Basic realm="Access to the qBittorrent WebUI"'})
                     f = {k: v[0] for k, v in parse_qs(body.decode()).items()}
                     if f.get("username") != QB_USER or f.get("password") != QB_PW:
                         return self._send(403, b"Forbidden")
+                    # QB_204=1 模拟 qB 5.2.x：成功回 204 空正文，会话只在 Set-Cookie
+                    if getattr(app, "mode204", False):
+                        if getattr(app, "mode204nocookie", False):   # 反代吞掉 Set-Cookie
+                            return self._send(204, b"")
+                        return self._send(204, b"", extra={"Set-Cookie": "SID=1; Path=/"})
                     return self._send(200, b"Ok.", extra={"Set-Cookie": "SID=1; Path=/"})
                 if u.path.startswith("/api/") and self.headers.get("Cookie") != "SID=1":
                     return self._send(403, b"Forbidden")
@@ -547,6 +646,84 @@ def tr_case(case, script, extra=(), yes=True, mode="ok"):
 def main():
     only = set(sys.argv[1:])
     want = lambda c: (not only) or any(c.startswith(o) for o in only)   # noqa
+
+    # ---------------- QB-22 qB 5.2.x 登录回法（204 空正文） ----------------
+    if want("QB-22"):
+        print("\nQB-22 qB 5.2.x：auth/login 成功 = 204 空正文 + Set-Cookie（官方 PR #21349）")
+        h = tracker_replace.http_hint
+        check("204 提示不提白名单/CSRF", "白名单" not in (h(204, "") or ""),
+              (h(204, "") or "")[:24])
+        old_raw, new_raw, oh, nh = make_pair("Movie A")
+        m = MockQB(old_raw, mode="ok")
+        m.mode204 = True
+        srv = Server(m)
+        srv.start()
+        try:
+            c = tracker_replace.QbClient("127.0.0.1", m.port, QB_USER, QB_PW, scheme="http")
+            check("204 空正文也算登录成功", bool(c.version), repr(c.version)[:30])
+            check("204 登录后 API 可用", bool(c.api), repr(c.api)[:30])
+            try:
+                tracker_replace.QbClient("127.0.0.1", m.port, QB_USER, "wrong-pw",
+                                         scheme="http")
+                check("204 模式错密码必须失败", False, "居然连上了")
+            except RuntimeError as e:
+                check("204 模式错密码 → 403", "403" in str(e), str(e)[:60])
+            m.mode204nocookie = True   # 只吞 cookie，认证形态仍是表单
+            m.authmode = "form"        # 显式钉死表单形态（US-002：防 mock 默认值漂移后假通过）
+            try:
+                tracker_replace.QbClient("127.0.0.1", m.port, QB_USER, QB_PW, scheme="http")
+                check("204 没给会话 cookie 必须判失败", False, "居然连上了")
+            except RuntimeError as e:
+                # 只验归因句：头部选哪条响应（403 vs 204）不是本断言的对象
+                check("204 无 cookie → 提示说清会话没拿到",
+                      "204 却没拿到会话 cookie" in str(e) and "Set-Cookie" in str(e),
+                      str(e)[-80:])
+        finally:
+            srv.stop()
+
+    # ---------------- QB-23/24 qB 5.2 新认证形态（Basic / API Key） ----------------
+    if want("QB-23"):
+        print("\nQB-23 qB 5.2 认证方式=Basic：只吃 Authorization: Basic，不用登录")
+        old_raw, new_raw, oh, nh = make_pair("Movie A")
+        m = MockQB(old_raw, mode="ok")
+        m.authmode = "basic"
+        srv = Server(m)
+        srv.start()
+        try:
+            c = tracker_replace.QbClient("127.0.0.1", m.port, QB_USER, QB_PW, scheme="http")
+            check("Basic 模式能连上", bool(c.version), repr(c.version)[:30])
+            check("Basic 模式 API 可用", bool(c.api), repr(c.api)[:20])
+            try:
+                tracker_replace.QbClient("127.0.0.1", m.port, QB_USER, "wrong", scheme="http")
+                check("Basic 模式错密码必须失败", False, "居然连上了")
+            except RuntimeError as e:
+                check("Basic 模式报错点明 Basic 认证", ("401" in str(e) or "403" in str(e)) and
+                      ("qBittorrent" in str(e) or "Basic" in str(e)), str(e)[:80])
+        finally:
+            srv.stop()
+
+    if want("QB-24"):
+        print("\nQB-24 qB 5.2 认证方式=API Key：只吃 Bearer / X-WebUI-ApiKey，auth/* 恒 403")
+        old_raw, new_raw, oh, nh = make_pair("Movie A")
+        m = MockQB(old_raw, mode="ok")
+        m.authmode = "apikey"
+        srv = Server(m)
+        srv.start()
+        try:
+            c = tracker_replace.QbClient("127.0.0.1", m.port, "", "QB-APIKEY-" + QB_APIKEY,
+                                         scheme="http")
+            check("API Key 放密码栏能连上", bool(c.version), repr(c.version)[:30])
+            c2 = tracker_replace.QbClient("127.0.0.1", m.port, "QB-APIKEY-" + QB_APIKEY,
+                                          "", scheme="http")
+            check("API Key 放用户栏也能连上", bool(c2.api), repr(c2.api)[:20])
+            try:
+                tracker_replace.QbClient("127.0.0.1", m.port, QB_USER, QB_PW, scheme="http")
+                check("普通账号在 API Key 模式必须失败", False, "居然连上了")
+            except RuntimeError as e:
+                check("失败提示说清要 API Key（含 401/Key 字样）",
+                      ("401" in str(e)) or ("Key" in str(e)), str(e)[:80])
+        finally:
+            srv.stop()
 
     # ---------------- QB-1 同 hash 正常路径 ----------------
     if want("QB-1"):
@@ -1036,6 +1213,65 @@ def main():
         check("零写操作", not writes, str(writes))
         check("说了连不上/认证问题", ("连不上" in p.stdout + p.stderr) or ("401" in p.stdout + p.stderr),
               (p.stdout + p.stderr)[:100])
+
+    # ---------------- TR-19 401 按 WWW-Authenticate 的 realm 分流（US-002） ----------------
+    if want("TR-19"):
+        print("\nTR-19 TR 的 401 分两层：realm 点名 Transmission=RPC 账号错；realm=gateway=前置 Basic")
+
+        def tr401(wa):
+            """造一个恒回 401 的 TR 端口，WWW-Authenticate 由参数定"""
+            class App:
+                def handler(self):
+                    class H(BaseHTTPRequestHandler):
+                        protocol_version = "HTTP/1.0"
+
+                        def log_message(self, *a):
+                            pass
+
+                        def _reply(self):
+                            self.send_response(401)
+                            if wa:
+                                self.send_header("WWW-Authenticate", wa)
+                            self.send_header("Content-Length", "0")
+                            self.end_headers()
+                        do_GET = do_POST = _reply
+                    return H
+            return App()
+
+        def conn_tr(wa):
+            s = Server(tr401(wa))
+            s.start()
+            try:
+                tracker_replace.TrClient("127.0.0.1", s.port, "rpc", "wrongpw", "http")
+                return ""
+            except RuntimeError as e:
+                return str(e)
+            finally:
+                s.stop()
+
+        e_rpc = conn_tr('Basic realm="Transmission"')      # 真 TR 的回法
+        e_gw = conn_tr('Basic realm="gateway"')            # nginx Basic auth / 前置网关
+        check("TR 401(realm=Transmission)：点名 RPC 账号，指「偏好→对等共享/远程控制」",
+              "Transmission 自己的 401" in e_rpc and "对等共享" in e_rpc
+              and "反代账号密码" not in e_rpc, e_rpc[:100])
+        check("TR 401(realm=gateway)：说是前置网关挡的，指「反代账号密码」栏",
+              "反代" in e_gw and "反代账号密码" in e_gw and "偏好→对等共享" not in e_gw,
+              e_gw[:100])
+        check("两种 401 的文案可区分（下一步动作不同）", bool(e_rpc) and e_rpc != e_gw,
+              "rpc=%r gw=%r" % (e_rpc[:40], e_gw[:40]))
+        # 仿真 badauth（真 TR 回法 realm=\"Transmission\"）走完整 CLI 链路也要报 RPC 口径
+        old, new, oh, nh = make_pair("Movie A")
+        m = MockTR(old, mode="badauth")
+        s = Server(m)
+        s.start()
+        try:
+            p, led, work = run_tool(m, "tr", "TR-19", new_raw=new, cfg_extra={"password": "x"})
+            out = p.stdout + p.stderr
+            check("TR-6 同款密码错走 CLI：报「RPC 账号/偏好→对等共享」口径，不再误怪前置网关",
+                  "对等共享" in out and ("RPC 账号" in out or "Transmission 自己的 401" in out)
+                  and "前面还挡了一层" not in out, out[-120:])
+        finally:
+            s.stop()
 
     # ---------------- TR-7 配不到新种子文件 ----------------
     if want("TR-7"):
@@ -1726,6 +1962,19 @@ def main():
             except Exception as e:
                 msg2 = str(e)
             check("TR 撞前置 Basic 也说人话", "Basic" in msg2, msg2[:120])
+
+            # US-002：「识别失败（qB/TR 都连不上）」聚合报错要把 qB/TR 各自最具体的原因分别列出，
+            # 不再只截最后一条 str(last)[:90]。s401 的 realm=gw 对两侧都是「前置网关」口径。
+            agg = ""
+            try:
+                tracker_replace.connect({"host": "127.0.0.1", "port": s401.port,
+                                         "user": "u", "password": "p", "scheme": "http"})
+            except Exception as e:
+                agg = str(e)
+            check("聚合报错同时列出 qB 侧与 TR 侧各自的原因",
+                  "识别失败" in agg and "qBittorrent" in agg and "Transmission" in agg
+                  and agg.index("qBittorrent") < agg.index("Transmission"),
+                  agg[:150])
         finally:
             s400.stop()
             s401.stop()
