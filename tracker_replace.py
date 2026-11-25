@@ -515,7 +515,9 @@ class QbClient:
         """WebAPI 版本门控：self.api 形如 "2.16.2"，与 ver 元组比较。
         解析失败按老 API（安全默认，走兼容 4.x 的旧路由/旧参数）。"""
         try:
-            cur = tuple(int(x) for x in str(self.api).strip().lstrip("v").split(".")[:3])
+            cur = tuple((int(x) for x in
+                         str(self.api).strip().lower().lstrip("v").split(".")[:3]))
+            cur = cur + (0,) * (3 - len(cur))   # "2.11" 两段补齐成 (2,11,0)
         except (ValueError, AttributeError):
             return False
         return cur >= ver
