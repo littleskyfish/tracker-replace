@@ -116,8 +116,15 @@ def parse_multipart(body, ctype):
 class MockQB(object):
     """按 qB 4.6/5.0 的真实行为建模：私有种子碰到重复 hash → 直接回 Fails."""
 
-    def __init__(self, torrent_raw, mode="ok", unwanted=False, api="2.0.1"):
+    def __init__(self, torrent_raw, mode="ok", unwanted=False, api="2.0.1",
+                 edit_old_sig=False, newapi=False):
         self.api = api                         # 报告的 webapiVersion：<2.1 走删除重建，≥2.1 可原地 editTracker
+        self.edit_old_sig = edit_old_sig       # True=老版 qB（4.1~5.0）：editTracker 只认 origUrl
+        self.newapi = newapi                   # True=qB 5.x（WebAPI 2.11+）：start/stop/export 新路由，
+                                               # hashes 只认 | 分隔，editTracker 成功回 204 空正文
+        if newapi:
+            self.api = "2.16.2"
+        self.supports_rm = True                # 仿真 removeTrackers 端点（WebAPI 2.11.1+ 才有）
         self.mode = mode                       # ok backflow badtracker never addfail stuckold + editfail
         #                                addfail_newonly（新种子恒 Fails.） addrace（头两次 Fails. 后恢复）
         self.ih = ih_of(torrent_raw)
@@ -243,6 +250,13 @@ class MockQB(object):
                         {"name": "Movie A/b.txt", "id": 1, "size": 10, "priority": 1}]),
                         "application/json")
                 if u.path == "/api/v2/torrents/exportFile":
+                    # newapi（WebAPI 2.11+）：老路由被改名砍掉
+                    if getattr(app, "newapi", False):
+                        return self._send(404, b"nope")
+                    return self._send(200, app.old_raw or b"", "application/x-bittorrent")
+                if u.path == "/api/v2/torrents/export":
+                    if not getattr(app, "newapi", False):
+                        return self._send(404, b"nope")
                     return self._send(200, app.old_raw or b"", "application/x-bittorrent")
                 return self._send(404, b"nope")
 
@@ -326,13 +340,32 @@ class MockQB(object):
                 app.calls.append((u.path, fields))
                 if u.path == "/api/v2/torrents/add":
                     return self._send(200, app._add(app, fields))
-                if u.path in ("/api/v2/torrents/resume", "/api/v2/torrents/pause"):
-                    hs = json.loads(fields.get("hashes") or "[]")
+                def _hashes_ok(app_, raw):
+                    """newapi：hashes 只认 "a|b" 竖线分隔，收到 JSON 数组形态当无效；
+                    老版：只认 JSON 数组。返回 hash 列表或 None（=无效）。"""
+                    raw = raw or ""
+                    if getattr(app_, "newapi", False):
+                        if raw.strip().startswith("["):
+                            return None          # JSON 数组 → 新 qB 不认
+                        return [x for x in raw.split("|") if x]
+                    try:
+                        return json.loads(raw or "[]")
+                    except ValueError:
+                        return None
+                if u.path in ("/api/v2/torrents/resume", "/api/v2/torrents/pause",
+                              "/api/v2/torrents/start", "/api/v2/torrents/stop"):
+                    new = getattr(app, "newapi", False)
+                    is_new_route = u.path.endswith(("start", "stop"))
+                    if new != is_new_route:      # 老版没 start/stop；新版没 resume/pause
+                        return self._send(404, b"nope")
+                    hs = _hashes_ok(app, fields.get("hashes"))
+                    if hs is None:
+                        return self._send(400, b"invalid hashes")
                     for h in hs:
                         e = app.entries.get(h)
                         if not e:
                             continue
-                        if u.path.endswith("resume"):
+                        if u.path.endswith(("resume", "start")):
                             e["paused"] = False
                             e["state"] = "uploading" if e["progress"] >= 1.0 else "downloading"
                         else:
@@ -342,7 +375,10 @@ class MockQB(object):
                 if u.path == "/api/v2/torrents/delete":
                     if app.mode == "stuckold":
                         return self._send(200, b"")          # 模拟：条目赖着不走
-                    for h in json.loads(fields.get("hashes") or "[]"):
+                    hs = _hashes_ok(app, fields.get("hashes"))
+                    if hs is None:
+                        return self._send(400, b"invalid hashes")
+                    for h in hs:
                         app.entries.pop(h, None)
                     return self._send(200, b"")
                 if u.path == "/api/v2/torrents/editTracker":
@@ -351,12 +387,34 @@ class MockQB(object):
                         return self._send(404, b"not found")
                     if app.mode == "editfail":
                         return self._send(500, b"boom")
-                    ou, nu = fields.get("origUrl"), fields.get("newUrl")
+                    # 新版仿真（默认，webapi≥2.11）：requireParams({hash,url})，没 url 直接 400；
+                    # 老版仿真（edit_old_sig=True）：只认 origUrl
+                    apiv = tuple(int(x) for x in
+                                 (getattr(app, "api", "0") or "0").split(".")[:2])
+                    new_sig = apiv >= (2, 11) and not getattr(app, "edit_old_sig", False)
+                    ou = fields.get("url") if new_sig else fields.get("origUrl")
+                    nu = fields.get("newUrl")
+                    if not ou:
+                        return self._send(400, b"FIELDS: (hash, url, newUrl, tier)")
+                    if nu in e["trackers"]:      # newUrl 已在列表 → Conflict
+                        return self._send(409, b'{"error": "Tracker is already added."}')
+                    if ou not in e["trackers"]:  # origUrl 不在列表 → Conflict
+                        return self._send(409, b'{"error": "The original URL is not an existing tracker."}')
                     tr = [nu if x == ou else x for x in e["trackers"]]
-                    if ou not in e["trackers"]:
-                        tr.append(nu)
                     e["trackers"] = [x for x in tr if x]
+                    # WebAPI 2.13+（newapi 仿真）：成功回 204 空正文；老版回 200 Ok.
+                    if getattr(app, "newapi", False):
+                        return self._send(204, b"")
                     return self._send(200, b"Ok.")
+                if u.path == "/api/v2/torrents/removeTrackers":
+                    if not getattr(app, "supports_rm", False):
+                        return self._send(404, b"not found")
+                    e = app.entries.get(fields.get("hash"))
+                    if e is None:
+                        return self._send(404, b"not found")
+                    gone = set((fields.get("urls") or "").split("\n"))
+                    e["trackers"] = [x for x in e["trackers"] if x not in gone]
+                    return self._send(200, b"")
                 if u.path == "/api/v2/torrents/filePrio":
                     return self._send(200, b"")
                 return self._send(404, b"nope")
@@ -556,11 +614,11 @@ class MockTR(object):
 
 # --------------------------------------------------------------- 跑一轮 tracker_replace
 def run_tool(mock, kind, case, extra=(), new_raw=None, cfg_extra=None, yes=True,
-             csv_map=None):
+             csv_map=None, keep_work=False):
     work = os.path.join(HERE, "work", case)
-    if os.path.exists(work):
+    if os.path.exists(work) and not keep_work:
         shutil.rmtree(work)
-    os.makedirs(os.path.join(work, "newt"))
+    os.makedirs(os.path.join(work, "newt"), exist_ok=True)
     shutil.copy(os.path.join(ROOT, "tracker_replace.py"), os.path.join(work, "tracker_replace.py"))
     open(os.path.join(work, "newt", "new.torrent"), "wb").write(new_raw)
     if csv_map:
@@ -617,9 +675,11 @@ def check(name, cond, note=""):
     return bool(cond)
 
 
-def qb_case(case, mode, diff_info=False, unwanted=False, extra=(), yes=True, api="2.0.1"):
+def qb_case(case, mode, diff_info=False, unwanted=False, extra=(), yes=True, api="2.0.1",
+            edit_old_sig=False, newapi=False):
     old, new, oh, nh = make_pair("Movie A", diff_info=diff_info)
-    m = MockQB(old, mode=mode, unwanted=unwanted, api=api)   # 客户端里躺着的是旧种子
+    m = MockQB(old, mode=mode, unwanted=unwanted, api=api,   # 客户端里躺着的是旧种子
+               edit_old_sig=edit_old_sig, newapi=newapi)
     m.old_raw = old
     s = Server(m)
     s.start()
@@ -1833,6 +1893,115 @@ def main():
         check("换成功", oh in done_of(led))
         check("没调 editTracker", not any(x == "/api/v2/torrents/editTracker" for x, _ in m.calls))
         check("走了删除→重加", m.order("/api/v2/torrents/delete", "/api/v2/torrents/add"))
+
+    # ---------------- QB-26 新版仿真：双参数原地换 ----------------
+    if want("QB-26"):
+        print("\nQB-26 新版仿真（webapi 2.11 只认 url）：工具双发参数 → 原地换成功、不删条目")
+        m, p, led, work, (oh, nh) = qb_case("QB-26", "ok", api="2.11.0")
+        check("换成功且记账", oh in done_of(led), str(list(done_of(led))))
+        et = [f for x, f in m.calls if x == "/api/v2/torrents/editTracker"]
+        check("editTracker 双发 url+origUrl+newUrl", bool(et) and all(
+            f.get("url") and f.get("origUrl") and f.get("newUrl") for f in et), str(et[:2]))
+        check("全程没删条目", not any(x == "/api/v2/torrents/delete" for x, _ in m.calls),
+              str([x for x, _a in m.calls]))
+        check("也没走加新条目", not any(x == "/api/v2/torrents/add" for x, _ in m.calls))
+        e = m.entries.get(oh) or {}
+        check("tracker 换成新的", e.get("trackers") == [NEW], str(e.get("trackers")))
+
+    # ---------------- QB-27 新版 409（newUrl 已在列）→ remove 路线，不删条目 ----------
+    if want("QB-27"):
+        print("\nQB-27 新版仿真：新 tracker 已在列（换一半残留旧的、且没在上传）→ 409 走 remove 路线，不发删除请求")
+        # 手工装配让同一个 MockQB 跨两次 apply 存活；模拟现场 = 上次只加了新 tracker
+        # 没清旧的，条目当前不在做种态（工具因此不会“已换新”跳过，也不靠台账过滤）
+        _o_raw, _n_raw, oh, nh = make_pair("Movie A")
+        m = MockQB(_o_raw, mode="ok", api="2.11.0")
+        m.old_raw = _o_raw
+        srv = Server(m)
+        srv.start()
+        try:
+            m.entries[oh]["trackers"] = [OLD, NEW]
+            m.entries[oh]["state"] = "stalledDL"      # 非做种态 → 不被“已换新跳过”
+            p2, led2, _w2 = run_tool(m, "qb", "QB-27", new_raw=_n_raw)
+        finally:
+            srv.stop()
+        check("换成功记账", oh in done_of(led2), str(p2.stdout[-300:]))
+        tail = [x for x, _a in m.calls]
+        check("editTracker 吃了 409 后走 removeTrackers",
+              any(x == "/api/v2/torrents/removeTrackers" for x in tail), str(tail))
+        check("全程没发删除请求",
+              not any(x == "/api/v2/torrents/delete" for x in tail), str(tail))
+        check("全程没重加条目", not any(x == "/api/v2/torrents/add" for x in tail), str(tail))
+        e = m.entries.get(oh) or {}
+        check("列表里只剩新 tracker", e.get("trackers") == [NEW], str(e.get("trackers")))
+        check("文案说明新 tracker 本已在列", "本已在列" in p2.stdout, p2.stdout[-300:])
+
+    # ---------------- QB-28 老版仿真（只认 origUrl）仍原地成功 ----------------
+    if want("QB-28"):
+        print("\nQB-28 老版仿真（webapi 2.11 但 editTracker 只认 origUrl）：双发参数仍原地成功")
+        m, p, led, work, (oh, nh) = qb_case("QB-28", "ok", api="2.11.0", edit_old_sig=True)
+        check("换成功且记账", oh in done_of(led), str(list(done_of(led))))
+        check("全程没删条目", not any(x == "/api/v2/torrents/delete" for x, _ in m.calls),
+              str([x for x, _a in m.calls]))
+        e = m.entries.get(oh) or {}
+        check("tracker 换成新的", e.get("trackers") == [NEW], str(e.get("trackers")))
+
+    # ---------------- QB-29 新版 qB 5.x（WebAPI 2.16.2）全路由适配 ----------------
+    if want("QB-29"):
+        print("\nQB-29 newapi 仿真（webapi 2.16.2：只认 start/stop/export、hashes 只认 |、editTracker 回 204）：删除重建路线全流程打新路由、0 失败")
+        _o_raw, _n_raw, oh, nh = make_pair("Movie A", diff_info=True)
+        m = MockQB(_o_raw, mode="ok", newapi=True)
+        m.old_raw = _o_raw
+        srv = Server(m)
+        srv.start()
+        try:
+            p, led, work = run_tool(m, "qb", "QB-29", new_raw=_n_raw, csv_map=oh)
+        finally:
+            srv.stop()
+        check("换成功且记账", oh in done_of(led), str(p.stdout[-300:]))
+        check("0 失败", not failed_of(led), str(list(failed_of(led))))
+        paths = [x for x, _a in m.calls]
+        check("全程没打老路由 pause/resume",
+              not any(x in ("/api/v2/torrents/pause", "/api/v2/torrents/resume")
+                      for x in paths), str(paths))
+        check("全程没打老路由 exportFile",
+              not any(x == "/api/v2/torrents/exportFile" for x in paths), str(paths))
+        check("stop 打到新路由", any(x == "/api/v2/torrents/stop" for x in paths),
+              str(paths))
+        check("start 打到新路由", any(x == "/api/v2/torrents/start" for x in paths),
+              str(paths))
+        check("delete 有打（删除重建路线）",
+              any(x == "/api/v2/torrents/delete" for x in paths), str(paths))
+        chks = [f for x, f in m.calls
+                if x in ("/api/v2/torrents/stop", "/api/v2/torrents/start",
+                         "/api/v2/torrents/delete")]
+        check("stop/start/delete 的 hashes 全是 | 分隔（无 JSON 数组）",
+              bool(chks) and all(not (f.get("hashes") or "").startswith("[")
+                                 for f in chks), str(chks[:3]))
+        check("新条目 tracker 是新的",
+              any(e.get("trackers") == [NEW] for e in m.entries.values()),
+              str([e.get("trackers") for e in m.entries.values()]))
+        check("新导出路由被用上（export 有调用）",
+              any(x == "/api/v2/torrents/export" for x in paths), str(paths))
+        check("导出备份落盘（dump 走新路由成功拿到字节）",
+              any(fn.endswith(".old.torrent")
+                  for _, _d, _fs in os.walk(os.path.join(work, "state", "backup"))
+                  for fn in _fs),
+              str([fn for _r, _d, fs in os.walk(os.path.join(work, "state"))
+                   for fn in fs]))
+
+    # ---------------- QB-30 newapi 原地换：editTracker 204 判成功 ----------------
+    if want("QB-30"):
+        print("\nQB-30 newapi 仿真：同 hash（只换 tracker）走原地 editTracker，成功回 204 空正文 → 判定成功、不误回退删种")
+        m, p, led, work, (oh, nh) = qb_case("QB-30", "ok", newapi=True)
+        check("换成功且记账", oh in done_of(led), str(p.stdout[-300:]))
+        et = [f for x, f in m.calls if x == "/api/v2/torrents/editTracker"]
+        check("editTracker 有打且双发参数", bool(et) and all(
+            f.get("url") and f.get("origUrl") and f.get("newUrl") for f in et), str(et[:2]))
+        check("mock 确实在 newapi 态（webapi 2.16.2）", m.api == "2.16.2", m.api)
+        check("全程没删条目", not any(x == "/api/v2/torrents/delete" for x, _ in m.calls),
+              str([x for x, _a in m.calls]))
+        e = m.entries.get(oh) or {}
+        check("tracker 换成新的", e.get("trackers") == [NEW], str(e.get("trackers")))
 
     # ---------------- PEND-1 兜底等待不守活寡 ----------------
     if want("PEND-1"):

@@ -184,6 +184,7 @@ exe 只能在 Windows 上打（PyInstaller 不能交叉编译），所以 Releas
 
 `-V` 打版本号；窗口标题、网页标签、镜像 tag 同步。
 
+- **1.15.2** —— 新版 qB（5.x，WebAPI 2.11+）路由/参数全适配：start/stop/export 新路由按版本门控（老版本原样走 resume/pause/exportFile）、hashes 改竖线分隔、editTracker 成功码 200/204 通吃；editTracker 参数双发新旧通吃，409（新 tracker 已在列/旧的早没了）改走 removeTrackers 或确认跳过，不再删种子重建；失败日志带上提交的 URL 和 qB 原文；pending 复查改指数退避（6/12/24/48/60s，最多 5 次），超限醒目提示去 GUI 查卸载。
 - **1.15.1** —— 认证说明同步：qB 5.2 三种形态（204 登录 / Basic / API Key 填 `QB-APIKEY-<key>`）在界面和文档里写清；401 按 realm 分流，Transmission 与识别失败不再误报「前置挡了一层 Basic」。
 - **1.15** —— 反代场景补齐：地址可写子路径、能填前置 Basic 账号；公网明文不发密码、自签证书不再自动免验证、界面密码默认不写进配置文件。
 - **1.14** —— 出 Windows exe（Actions 打，没装 Python 的电脑双击就能用）；连不上时把 400/401/403/404 翻译成人话（协议填反 / 前面挡了 Basic 认证 / WebUI 挂在子路径下 / 白名单拦了）。

@@ -58,7 +58,10 @@ import binascii
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
-VERSION = "1.15.1"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+VERSION = "1.15.2"        # 每次改动往上加：--version、窗口标题、压缩包名都用它
+
+# _PendingLater 复查退避：本轮先跳过，排回队尾按 6/12/24/48s（封顶 60s）回头看
+PENDING_BACKOFF = (6, 12, 24, 48, 60)
 
 def _base_dir():
     """程序所在目录。PyInstaller 单文件模式下 __file__ 指向退出就销毁的临时解压
@@ -508,6 +511,15 @@ class QbClient:
         except ValueError:
             return t
 
+    def _api_ge(self, ver):
+        """WebAPI 版本门控：self.api 形如 "2.16.2"，与 ver 元组比较。
+        解析失败按老 API（安全默认，走兼容 4.x 的旧路由/旧参数）。"""
+        try:
+            cur = tuple(int(x) for x in str(self.api).strip().lstrip("v").split(".")[:3])
+        except (ValueError, AttributeError):
+            return False
+        return cur >= ver
+
     # ---- 能力 ----
     def caps(self):
         skip = True
@@ -547,13 +559,41 @@ class QbClient:
         if r.status_code != 200:
             raise RuntimeError("addTrackers HTTP %s" % r.status_code)
 
-    def edit_tracker(self, h, orig_url, new_url):
-        """原地替换一条 tracker URL（官方端点，qB 4.1 起就有；不删条目、不碰数据）"""
-        r = self.s.post(self.base + "/api/v2/torrents/editTracker",
-                        data={"hash": h, "origUrl": orig_url, "newUrl": new_url},
+    def remove_trackers(self, h, urls):
+        """删掉条目上的某几条 tracker（不删条目本身）。WebAPI 2.11.1+ 才有；
+        老版本没这个端点 → 404，抛错交给上层分流处理。"""
+        r = self.s.post(self.base + "/api/v2/torrents/removeTrackers",
+                        data={"hash": h,
+                              "urls": urls if isinstance(urls, str) else "\n".join(urls)},
                         timeout=self.timeout)
         if r.status_code != 200:
-            raise RuntimeError("editTracker HTTP %s" % r.status_code)
+            body = (r.text or "").strip()
+            raise RuntimeError("removeTrackers HTTP %s%s"
+                               % (r.status_code,
+                                  ("｜qB 说：" + body[:160]) if body else ""))
+
+    def edit_tracker(self, h, orig_url, new_url):
+        """原地替换一条 tracker URL（官方端点，qB 4.1 起就有；不删条目、不碰数据）。
+        参数名双发：新版（WebAPI 2.11+ / qB 5.1.x 起）requireParams 认 url，
+        老版（4.1~5.0）认 origUrl；多余的参数 qB 会忽略，新旧一次通吃。
+        成功状态码：老版 200，新版（WebAPI 2.13+ 起改 204）——按 2xx 判定。"""
+        r = self.s.post(self.base + "/api/v2/torrents/editTracker",
+                        data={"hash": h, "url": orig_url, "origUrl": orig_url,
+                              "newUrl": new_url},
+                        timeout=self.timeout)
+        if not 200 <= r.status_code < 300:
+            body = (r.text or "").strip()
+            raise RuntimeError("editTracker HTTP %s%s"
+                               % (r.status_code,
+                                  ("｜qB 说：" + body[:160]) if body else ""))
+        body = (r.text or "").strip()
+        if body:
+            try:
+                err = json.loads(body).get("error")
+            except (ValueError, AttributeError):
+                err = None
+            if err:
+                raise RuntimeError("editTracker 被拒：%s" % str(err)[:160])
 
     def list_trackers(self, ts):
         """批量取 tracker（qB 只能逐种取，线程池加速）"""
@@ -567,7 +607,14 @@ class QbClient:
         return p, fl
 
     def dump(self, h):
-        """导出该种子的 .torrent 原始字节（qB 独有，TR 没有对应能力）"""
+        """导出该种子的 .torrent 原始字节（qB 独有，TR 没有对应能力）。
+        WebAPI 2.11+（qB 5.x）路由改名 exportFile→export；≥2.11 先试新路由，
+        非 200 回退老路由，兼容改名前后的版本。"""
+        if self._api_ge((2, 11, 0)):
+            r = self.s.get(self.base + "/api/v2/torrents/export",
+                           params={"hash": h}, timeout=self.timeout)
+            if r.status_code == 200 and len(r.content) > 60:
+                return r.content
         r = self.s.get(self.base + "/api/v2/torrents/exportFile",
                        params={"hash": h}, timeout=self.timeout)
         return r.content if r.status_code == 200 and len(r.content) > 60 else None
@@ -630,22 +677,32 @@ class QbClient:
         self.s.post(self.base + "/api/v2/torrents/filePrio",
                     data={"hash": h, "id": ids, "priority": "0"}, timeout=self.timeout)
 
+    def _hashes_param(self, h):
+        """hashes 参数形态门控：WebAPI 2.11+（qB 5.x）改吃 "a|b" 竖线分隔，
+        老版吃 JSON 数组字符串。单个 hash 也走同样规则，保持形态一致。"""
+        return "|".join([h]) if self._api_ge((2, 11, 0)) else json.dumps([h])
+
     def remove(self, h):
         try:
             self.stop(h)          # 先暂停：qB 停掉活跃传输后卸载快，hash 释放也快
         except Exception:
             pass
+        # delete 路由各版本都在，只有 hashes 参数形态变了
         self.s.post(self.base + "/api/v2/torrents/delete",
-                    data={"hashes": json.dumps([h]), "deleteFiles": "false"},
+                    data={"hashes": self._hashes_param(h), "deleteFiles": "false"},
                     timeout=self.timeout)
 
     def start(self, h):
-        self.s.post(self.base + "/api/v2/torrents/resume",
-                    data={"hashes": json.dumps([h])}, timeout=self.timeout)
+        # qB 5.x（WebAPI 2.11+）：resume→start；老版仍是 resume
+        route = "start" if self._api_ge((2, 11, 0)) else "resume"
+        self.s.post(self.base + "/api/v2/torrents/" + route,
+                    data={"hashes": self._hashes_param(h)}, timeout=self.timeout)
 
     def stop(self, h):
-        self.s.post(self.base + "/api/v2/torrents/pause",
-                    data={"hashes": json.dumps([h])}, timeout=self.timeout)
+        # qB 5.x（WebAPI 2.11+）：pause→stop；老版仍是 pause
+        route = "stop" if self._api_ge((2, 11, 0)) else "pause"
+        self.s.post(self.base + "/api/v2/torrents/" + route,
+                    data={"hashes": self._hashes_param(h)}, timeout=self.timeout)
 
 # ------------------------------------------------------------ Transmission
 def tr_auth_hint(resp):
@@ -1335,12 +1392,18 @@ def _qb_inplace_ok(client):
 
 
 def _qb_swap_revert(client, ih, olds, new_url):
-    """原地改没成功：把已换的换回去、缺的老地址补回来（条目从未删过，复原代价小）"""
+    """原地改没成功：把已换的换回去、缺的老地址补回来（条目从未删过，复原代价小）。
+    新版 qB（WebAPI≥2.11.1）上 editTracker 换不掉“已存在的 newUrl”（409），
+    撤新 tracker 改用 removeTrackers，撤不掉的旧地址仍用 addTrackers 补回。"""
     try:
         now = client.trackers(ih)
         if new_url in now:
-            client.edit_tracker(ih, new_url, olds[0])
-            now = client.trackers(ih)
+            try:
+                client.remove_trackers(ih, new_url)
+                now = [u for u in client.trackers(ih) if u != new_url]
+            except Exception:
+                client.edit_tracker(ih, new_url, olds[0])
+                now = client.trackers(ih)
         for u in olds:
             if u not in now:
                 client.add_trackers(ih, u)
@@ -1361,12 +1424,41 @@ def _qb_swap_inplace(client, r, new_url, old_hint):
     if old_hint and len(olds) > 1:
         raise RuntimeError("匹配到 %d 条旧 tracker，为安全起见交给删除重建流程处理" % len(olds))
     log("  · 试原地换 tracker（不删条目、不暂停、零等待）%s" % tag)
+    probe = None                    # 失败时带上实际提交的 origUrl→newUrl 供排障
     try:
         for u in olds:
+            probe = (u, new_url)
             client.edit_tracker(ih, u, new_url)
     except RuntimeError as e:
+        msg = str(e)
+        low = msg.lower()
+        if "409" in msg or "conflict" in low:
+            # 409/Conflict 按原因分流，两种情况都不用删条目重建
+            after = list(client.trackers(ih))
+            if new_url in after:
+                # 新 tracker 已在列表（qB: newUrl already exists / origUrl 不在 = 早换过）
+                # → 把其余匹配 old_hint 的旧 tracker 逐条 remove，再核对
+                try:
+                    for u in olds:
+                        if u in after:
+                            client.remove_trackers(ih, u)
+                    after2 = list(client.trackers(ih))
+                    if new_url in after2 and not any(u in after2 for u in olds):
+                        log("  · 新 tracker 本已在列，已清掉旧 tracker（未删条目）%s" % tag)
+                        return {"mode": "inplace-existing", "before": before,
+                                "after": after2}
+                    log("  · 清旧 tracker 后核对仍不过（新在=%s），交给删除重建 %s"
+                        % (new_url in after2, tag))
+                except Exception as e2:
+                    log("  · 清理旧 tracker 没成功（%s），交给删除重建 %s"
+                        % (str(e2)[:60], tag))
+            else:
+                log("  · !! editTracker 回 409 且新 tracker 不在列表（%s），交给删除重建 %s"
+                    % (msg[:120], tag))
         _qb_swap_revert(client, ih, olds, new_url)
-        raise RuntimeError("editTracker 调用失败：%s（已回退）" % str(e)[:70])
+        raise RuntimeError("editTracker 调用失败（提交 %s → %s）：%s（已回退）"
+                           % (probe[0][:60] if probe else "?", new_url[:60],
+                              msg[:140]))
     after = list(client.trackers(ih))
     left = [u for u in olds if u in after]
     if new_url not in after or left:
@@ -2002,23 +2094,24 @@ def cmd_apply(a):
                 save_ledger(L)
                 result_row(rec)
             except _PendingLater as e:
-                gap = max(2, int(getattr(a, "wait_limit", 6)))
-                if again < 2 and not _stopped():
+                if again < len(PENDING_BACKOFF) and not _stopped():
                     queue.append([r, again + 1])
-                    print("  %s ⏳ %s | %s  hash=%s（不等它，约 %d 秒后再看，先看别的）"
-                          % (tag, (r["name"] or "")[:36], str(e)[:80], r["hash"][:12], gap))
-                    time.sleep(gap)
+                    print("  %s ⏳ %s | %s  hash=%s（不等它，先看别的；回头第 %d 次复查约等 %d 秒）"
+                          % (tag, (r["name"] or "")[:36], str(e)[:80], r["hash"][:12],
+                             again + 1, PENDING_BACKOFF[again]))
                     continue
                 L[key]["failed"][r["hash"]] = {
                     "name": r["name"],
-                    "why": "qB 删旧种一直没收尾，回看 2 次后放弃；旧种子仍按原 tracker 做种，数据没动",
+                    "why": "qB 删旧种一直没收尾，回看 %d 次后放弃；旧种子仍按原 tracker 做种，数据没动"
+                           % len(PENDING_BACKOFF),
                     "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
                 if bk:
                     L[key]["failed"][r["hash"]]["backup"] = bk
                 save_ledger(L)
                 total_bad += 1
-                print("  %s ✗ %s | 回看 2 次 qB 还没删完，这单先记失败  hash=%s"
-                      % (tag, (r["name"] or "")[:36], r["hash"][:12]))
+                print("  %s ✗ %s | !! qB 卸载卡住（回看 %d 次还挂着），去 qB GUI 看这颗；"
+                      "这单先记失败  hash=%s"
+                      % (tag, (r["name"] or "")[:36], len(PENDING_BACKOFF), r["hash"][:12]))
             except Exception as e:
                 total_bad += 1
                 bad_streak += 1
